@@ -10,7 +10,6 @@
  */
 
 import { createNoise2D } from 'simplex-noise';
-import Alea from 'alea'; // deterministic PRNG seeded from the game seed
 
 const CHUNK_SIZE = 64;
 const SUBDIVISIONS = 32; // grid cells per chunk edge

@@ -1,12 +1,14 @@
 import { defineConfig } from 'vite';
 import path from 'path';
+import wasm from 'vite-plugin-wasm';
 
 export default defineConfig({
+  plugins: [wasm()],
   root: '.',
   publicDir: 'public',
   build: {
     outDir: 'dist',
-    target: 'es2022',
+    target: 'esnext',
     sourcemap: false,
     rollupOptions: {
       input: {
@@ -19,11 +21,11 @@ export default defineConfig({
   },
   worker: {
     format: 'es',
+    plugins: () => [wasm()],
   },
   server: {
     port: 3000,
     headers: {
-      // Required for SharedArrayBuffer / WASM threading
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },

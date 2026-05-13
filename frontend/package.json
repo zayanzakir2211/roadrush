@@ -10,12 +10,13 @@
     "deploy": "wrangler pages deploy dist"
   },
   "dependencies": {
-    "three": "^0.167.0",
+    "@dimforge/rapier3d": "^0.12.0",
     "simplex-noise": "^4.0.1",
-    "@dimforge/rapier3d": "^0.12.0"
+    "three": "^0.167.0"
   },
   "devDependencies": {
-    "vite": "^5.0.0",
-    "wrangler": "^3.0.0"
+    "vite": "^8.0.12",
+    "vite-plugin-wasm": "^3.6.0",
+    "wrangler": "^4.90.1"
   }
 }
