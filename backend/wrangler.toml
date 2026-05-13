@@ -1,11 +1,13 @@
-name = "multiplayer-car-game-backend"
+name = "roadrush"
 main = "src/index.js"
 compatibility_date = "2026-05-13"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ENVIRONMENT = "production"
-
+FIREBASE_API_KEY = "2COtn0c6LxPFuSTzvT00aUJLEia37h3CMpQrW6Ig"
+FIREBASE_URL = "https://roadrush-b3ece-default-rtdb.asia-southeast1.firebasedatabase.app"
+FIREBASE_PROJECT_ID = "roadrush"
 # KV namespace for chunk caching
 [[kv_namespaces]]
 binding = "roadrush"
@@ -21,6 +23,3 @@ class_name = "GameRoom"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GameRoom"]
-FIREBASE_API_KEY = "2COtn0c6LxPFuSTzvT00aUJLEia37h3CMpQrW6Ig"
-FIREBASE_URL = "https://roadrush-b3ece-default-rtdb.asia-southeast1.firebasedatabase.app"
-FIREBASE_PROJECT_ID = "roadrush"
