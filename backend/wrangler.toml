@@ -8,9 +8,9 @@ ENVIRONMENT = "production"
 
 # KV namespace for chunk caching
 [[kv_namespaces]]
-binding = "CHUNK_CACHE"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_YOUR_KV_PREVIEW_NAMESPACE_ID"
+binding = "roadrush"
+id = "b37db24f53c54d07a17864b49792176f"
+preview_id = "b37db24f53c54d07a17864b49792176f"
 
 # Durable Objects for WebSocket rooms
 [[durable_objects.bindings]]
@@ -22,6 +22,6 @@ tag = "v1"
 new_classes = ["GameRoom"]
 
 # Secrets (set via: wrangler secret put SECRET_NAME)
-# FIREBASE_API_KEY
-# FIREBASE_URL
-# FIREBASE_PROJECT_ID
+FIREBASE_API_KEY = "2COtn0c6LxPFuSTzvT00aUJLEia37h3CMpQrW6Ig"
+FIREBASE_URL = "https://roadrush-b3ece-default-rtdb.asia-southeast1.firebasedatabase.app"
+FIREBASE_PROJECT_ID = "roadrush"
