@@ -83,7 +83,6 @@ self.onmessage = async (e) => {
 async function initRapier() {
   try {
     RAPIER = await import('@dimforge/rapier3d');
-    await RAPIER.init();
 
     // Create physics world with standard gravity
     const gravity = { x: 0, y: -20, z: 0 };
