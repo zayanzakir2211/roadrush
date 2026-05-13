@@ -1,110 +1,94 @@
 /**
  * physicsWorker.js — Rapier Physics Simulation (Web Worker)
- *
- * Runs at a fixed 60Hz timestep. Simulates the local player vehicle using
- * Rapier's built-in vehicle controller. Sends position/rotation back to the
- * main thread each step via postMessage.
- *
- * Receives messages:
- *   { type: 'init' }              — load Rapier WASM
- *   { type: 'setSeed', seed }     — seed for deterministic world (not used directly in physics)
- *   { type: 'createVehicle', ... } — spawn the player's rigid body + vehicle controller
- *   { type: 'input', throttle, steer, brake } — update controls each frame
- *   { type: 'addTrimesh', vertices, indices } — add terrain collision mesh
- *   { type: 'pause' / 'resume' }  — pause/resume simulation
+ * FIXED: Correct Rapier WASM init + stable vehicle physics
  */
 
-import * as RAPIER from '@dimforge/rapier3d';
-
+let RAPIER = null;
 let world = null;
 let vehicleBody = null;
-let vehicleController = null;
 let paused = false;
 
-// Current control inputs (written by 'input' messages, read each physics step)
 let inputThrottle = 0;
-let inputSteer = 0;
-let inputBrake = 0;
+let inputSteer    = 0;
+let inputBrake    = 0;
 
-// Fixed timestep: 60 Hz
 const FIXED_DT = 1 / 60;
 let stepIntervalId = null;
 
-// Vehicle config (set on createVehicle)
 let vehicleDef = {
   engineForce: 3500,
-  brakeForce: 200,
-  maxSteer: 0.5,
+  brakeForce:  200,
+  maxSteer:    0.5,
 };
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
 self.onmessage = async (e) => {
   const msg = e.data;
-
   switch (msg.type) {
     case 'init':
       await initRapier();
       break;
-
     case 'setSeed':
-      // Seed is for world gen; physics uses it only if needed for determinism
       break;
-
     case 'createVehicle':
-      if (world) {
-        createVehicle(msg);
-      }
+      if (world) createVehicle(msg);
       break;
-
     case 'input':
       inputThrottle = clamp(msg.throttle ?? 0, -1, 1);
       inputSteer    = clamp(msg.steer    ?? 0, -1, 1);
       inputBrake    = clamp(msg.brake    ?? 0,  0, 1);
       break;
-
     case 'addTrimesh':
-      if (world && msg.vertices && msg.indices) {
+      if (world && msg.vertices && msg.indices)
         addTrimesh(msg.vertices, msg.indices, msg.offsetX ?? 0, msg.offsetZ ?? 0);
-      }
       break;
-
-    case 'pause':
-      paused = true;
-      break;
-
-    case 'resume':
-      paused = false;
-      break;
+    case 'pause':  paused = true;  break;
+    case 'resume': paused = false; break;
   }
 };
 
-// ── Rapier initialisation ─────────────────────────────────────────────────────
+// ── Rapier init (THE FIX) ─────────────────────────────────────────────────────
+// @dimforge/rapier3d exports a default async init, not RAPIER.init()
+// We must dynamic-import and await the default export.
 
 async function initRapier() {
   try {
-    await RAPIER.init();
+    // ✅ Correct import pattern for rapier3d in a module worker
+    const rapierModule = await import('@dimforge/rapier3d');
 
-    // Create physics world with standard gravity
-    const gravity = { x: 0, y: -20, z: 0 };
-    world = new RAPIER.World(gravity);
+    // The package exports an `init` as the default OR as a named export depending
+    // on the bundler. Try both patterns:
+    if (typeof rapierModule.default === 'function') {
+      await rapierModule.default();           // default export is the init fn
+    } else if (typeof rapierModule.init === 'function') {
+      await rapierModule.init();              // named export
+    }
+    // After awaiting init, all RAPIER classes are available on the module
+    RAPIER = rapierModule;
 
-    // Add a default flat ground plane for before terrain chunks arrive
-    const groundDesc = RAPIER.RigidBodyDesc.fixed();
-    const groundBody = world.createRigidBody(groundDesc);
-    const groundCollider = RAPIER.ColliderDesc.halfSpace({ x: 0, y: 1, z: 0 });
-    world.createCollider(groundCollider, groundBody);
-
-    // Start the step loop
+    buildWorld();
     stepIntervalId = setInterval(stepPhysics, FIXED_DT * 1000);
-
     self.postMessage({ type: 'ready' });
+
   } catch (err) {
-    console.error('[PhysicsWorker] Failed to init Rapier:', err);
-    // Fall back: simulate simple position update without real physics
+    console.error('[PhysicsWorker] Rapier init failed, using fallback:', err);
+    // Fallback: pure JS simulation so the game still works
     stepIntervalId = setInterval(stepFallback, FIXED_DT * 1000);
     self.postMessage({ type: 'ready', fallback: true });
   }
+}
+
+function buildWorld() {
+  const gravity = { x: 0, y: -20, z: 0 };
+  world = new RAPIER.World(gravity);
+
+  // Default ground plane
+  const groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+  world.createCollider(
+    RAPIER.ColliderDesc.halfSpace({ x: 0, y: 1, z: 0 }),
+    groundBody
+  );
 }
 
 // ── Vehicle creation ──────────────────────────────────────────────────────────
@@ -114,50 +98,49 @@ function createVehicle(cfg) {
   vehicleDef.brakeForce  = cfg.brakeForce  ?? 200;
   vehicleDef.maxSteer    = cfg.maxSteer    ?? 0.5;
 
-  const mass = cfg.mass ?? 1200;
+  const mass   = cfg.mass ?? 1200;
+  const spawnX = cfg.position?.x ?? 0;
   const spawnY = (cfg.position?.y ?? 2) + 1;
+  const spawnZ = cfg.position?.z ?? 0;
 
-  // Rigid body
   const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-    .setTranslation(cfg.position?.x ?? 0, spawnY, cfg.position?.z ?? 0)
-    .setLinearDamping(0.1)
-    .setAngularDamping(0.5)
+    .setTranslation(spawnX, spawnY, spawnZ)
+    .setLinearDamping(0.3)      // more damping = less sliding
+    .setAngularDamping(2.0)     // more damping = less spinning
     .setAdditionalMass(mass);
 
   vehicleBody = world.createRigidBody(bodyDesc);
 
-  // Box collider representing the chassis
-  const half = { x: 0.9, y: 0.4, z: 2.0 };
-  const chassisCollider = RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z)
-    .setFriction(0.5)
-    .setRestitution(0.1)
+  // Lock rotation on X and Z so the car doesn't flip easily
+  vehicleBody.setEnabledRotations(false, true, false, true);
+
+  const chassisCollider = RAPIER.ColliderDesc
+    .cuboid(0.9, 0.4, 2.0)
+    .setFriction(0.8)
+    .setRestitution(0.05)
     .setTranslation(0, 0.4, 0);
 
   world.createCollider(chassisCollider, vehicleBody);
 }
 
-// ── Terrain trimesh ───────────────────────────────────────────────────────────
+// ── Trimesh terrain ───────────────────────────────────────────────────────────
 
 function addTrimesh(vertices, indices, offsetX, offsetZ) {
-  // Shift vertices by chunk offset
   const shifted = new Float32Array(vertices.length);
   for (let i = 0; i < vertices.length; i += 3) {
-    shifted[i]     = vertices[i] + offsetX;
+    shifted[i]     = vertices[i]     + offsetX;
     shifted[i + 1] = vertices[i + 1];
     shifted[i + 2] = vertices[i + 2] + offsetZ;
   }
-
-  const groundDesc = RAPIER.RigidBodyDesc.fixed();
-  const groundBody = world.createRigidBody(groundDesc);
-  const colliderDesc = RAPIER.ColliderDesc.trimesh(shifted, indices)
-    .setFriction(0.8)
-    .setRestitution(0.05);
-  world.createCollider(colliderDesc, groundBody);
+  const groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+  world.createCollider(
+    RAPIER.ColliderDesc.trimesh(shifted, indices).setFriction(0.8).setRestitution(0.05),
+    groundBody
+  );
 }
 
 // ── Physics step ──────────────────────────────────────────────────────────────
 
-// Wheel positions relative to chassis (local space)
 const WHEEL_OFFSETS = [
   { x: -0.9, y: -0.35, z: -1.3 },
   { x:  0.9, y: -0.35, z: -1.3 },
@@ -166,134 +149,143 @@ const WHEEL_OFFSETS = [
 ];
 
 function stepPhysics() {
-  if (paused || !world || !vehicleBody) {
-    if (world && !paused) world.step();
+  if (!world) return;
+
+  if (paused) {
+    world.step();
     return;
   }
 
-  // ── Apply engine / steering forces ────────────────────────────────────────
+  if (!vehicleBody) {
+    world.step();
+    return;
+  }
 
   const rot = vehicleBody.rotation();
   const quat = { x: rot.x, y: rot.y, z: rot.z, w: rot.w };
 
-  // Forward vector in world space
+  // Forward vector in world space (vehicle's +Z)
   const fwd = rotateVec3({ x: 0, y: 0, z: 1 }, quat);
 
-  // Engine force along forward
+  // ── Engine force ─────────────────────────────────────────────────────────
   const forceScale = vehicleDef.engineForce * inputThrottle;
   vehicleBody.applyForce(
     { x: fwd.x * forceScale, y: 0, z: fwd.z * forceScale },
     true
   );
 
-  // Steering torque around Y
-  const steerTorque = inputSteer * 800;
+  // ── Steering torque ───────────────────────────────────────────────────────
+  // Scale torque by current speed so steering feels consistent
+  const vel   = vehicleBody.linvel();
+  const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+  const steerTorque = inputSteer * Math.min(speed * 120 + 200, 900);
   vehicleBody.applyTorque({ x: 0, y: steerTorque, z: 0 }, true);
 
-  // Braking: apply opposing linear velocity damping
+  // ── Lateral friction (stops sideways sliding) ─────────────────────────────
+  const right = rotateVec3({ x: 1, y: 0, z: 0 }, quat);
+  const lateralVel = right.x * vel.x + right.z * vel.z;
+  const lateralFriction = 2200;
+  vehicleBody.applyForce(
+    {
+      x: -right.x * lateralVel * lateralFriction,
+      y: 0,
+      z: -right.z * lateralVel * lateralFriction,
+    },
+    true
+  );
+
+  // ── Braking ───────────────────────────────────────────────────────────────
   if (inputBrake > 0) {
-    const vel = vehicleBody.linvel();
     vehicleBody.applyForce(
       {
-        x: -vel.x * vehicleDef.brakeForce * inputBrake,
+        x: -vel.x * vehicleDef.brakeForce * inputBrake * 3,
         y: 0,
-        z: -vel.z * vehicleDef.brakeForce * inputBrake,
+        z: -vel.z * vehicleDef.brakeForce * inputBrake * 3,
       },
       true
     );
   }
 
-  // Clamp velocity (max speed ~50 m/s = 180 km/h)
-  const vel = vehicleBody.linvel();
-  const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+  // ── Speed cap (≈ 180 km/h) ────────────────────────────────────────────────
   if (speed > 50) {
-    const scale = 50 / speed;
-    vehicleBody.setLinvel({ x: vel.x * scale, y: vel.y, z: vel.z * scale }, true);
+    const s = 50 / speed;
+    vehicleBody.setLinvel({ x: vel.x * s, y: vel.y, z: vel.z * s }, true);
   }
 
   // ── Step world ────────────────────────────────────────────────────────────
-
   world.step();
 
-  // ── Read back state ───────────────────────────────────────────────────────
-
-  const pos = vehicleBody.translation();
+  // ── Read back & post ──────────────────────────────────────────────────────
+  const pos    = vehicleBody.translation();
   const rotOut = vehicleBody.rotation();
   const velOut = vehicleBody.linvel();
-  const velocityScalar = Math.sqrt(velOut.x * velOut.x + velOut.z * velOut.z);
+  const velScalar = Math.sqrt(velOut.x * velOut.x + velOut.z * velOut.z);
 
-  // Compute approximate wheel world positions
   const wheels = WHEEL_OFFSETS.map((offset) => {
-    const wLocal = rotateVec3(offset, rotOut);
-    return {
-      px: pos.x + wLocal.x,
-      py: pos.y + wLocal.y,
-      pz: pos.z + wLocal.z,
-    };
+    const wl = rotateVec3(offset, rotOut);
+    return { px: pos.x + wl.x, py: pos.y + wl.y, pz: pos.z + wl.z };
   });
 
   self.postMessage({
     type: 'state',
     px: pos.x, py: pos.y, pz: pos.z,
     rx: rotOut.x, ry: rotOut.y, rz: rotOut.z, rw: rotOut.w,
-    velocity: velocityScalar,
+    velocity: velScalar,
     wheels,
   });
 }
 
-// ── Fallback simulation (no Rapier) ──────────────────────────────────────────
-// Simple Euler integration: vehicle stays on Y=0 plane.
+// ── Fallback simulation ───────────────────────────────────────────────────────
 
-const fb = {
-  x: 0, y: 0.5, z: 0,
-  vx: 0, vz: 0,
-  yaw: 0,
-};
+const fb = { x: 0, y: 0.5, z: 0, vx: 0, vz: 0, yaw: 0 };
 
 function stepFallback() {
   if (paused) return;
 
-  const dt = FIXED_DT;
+  const dt   = FIXED_DT;
   const cosY = Math.cos(fb.yaw);
   const sinY = Math.sin(fb.yaw);
 
-  // Steering
-  if (Math.abs(fb.vx) + Math.abs(fb.vz) > 0.1) {
-    fb.yaw += inputSteer * 0.035;
-  }
+  const spd = Math.sqrt(fb.vx * fb.vx + fb.vz * fb.vz);
+
+  // Steer only when moving
+  if (spd > 0.05) fb.yaw += inputSteer * 0.03;
 
   // Throttle
-  const force = vehicleDef.engineForce * 0.0008 * inputThrottle;
-  fb.vx += cosY * force * dt;
-  fb.vz += sinY * force * dt;
+  const acc = vehicleDef.engineForce * 0.0006 * inputThrottle;
+  fb.vx += cosY * acc * dt;
+  fb.vz += sinY * acc * dt;
 
   // Drag
-  fb.vx *= 0.97;
-  fb.vz *= 0.97;
+  fb.vx *= 0.96;
+  fb.vz *= 0.96;
 
   // Brake
-  if (inputBrake > 0) {
-    fb.vx *= 0.9;
-    fb.vz *= 0.9;
-  }
+  if (inputBrake > 0) { fb.vx *= 0.88; fb.vz *= 0.88; }
+
+  // Lateral friction (stop sliding)
+  const rx = -sinY, rz = cosY;
+  const lat = rx * fb.vx + rz * fb.vz;
+  fb.vx -= rx * lat * 0.7;
+  fb.vz -= rz * lat * 0.7;
 
   fb.x += fb.vx;
   fb.z += fb.vz;
 
-  const speed = Math.sqrt(fb.vx * fb.vx + fb.vz * fb.vz);
+  const speed   = Math.sqrt(fb.vx * fb.vx + fb.vz * fb.vz);
   const halfYaw = fb.yaw / 2;
+  const sinH    = Math.sin(halfYaw);
+  const cosH    = Math.cos(halfYaw);
 
-  const wheels = [
-    { px: fb.x - Math.sin(fb.yaw) * 0.9 - cosY * 1.3, py: fb.y - 0.35, pz: fb.z + Math.cos(fb.yaw) * 0.9 - sinY * 1.3 },
-    { px: fb.x + Math.sin(fb.yaw) * 0.9 - cosY * 1.3, py: fb.y - 0.35, pz: fb.z - Math.cos(fb.yaw) * 0.9 - sinY * 1.3 },
-    { px: fb.x - Math.sin(fb.yaw) * 0.9 + cosY * 1.3, py: fb.y - 0.35, pz: fb.z + Math.cos(fb.yaw) * 0.9 + sinY * 1.3 },
-    { px: fb.x + Math.sin(fb.yaw) * 0.9 + cosY * 1.3, py: fb.y - 0.35, pz: fb.z - Math.cos(fb.yaw) * 0.9 + sinY * 1.3 },
-  ];
+  const wheels = WHEEL_OFFSETS.map((o) => {
+    const wl = rotateVec3(o, { x: 0, y: sinH, z: 0, w: cosH });
+    return { px: fb.x + wl.x, py: fb.y + wl.y, pz: fb.z + wl.z };
+  });
 
   self.postMessage({
     type: 'state',
     px: fb.x, py: fb.y, pz: fb.z,
-    rx: 0, ry: Math.sin(halfYaw), rz: 0, rw: Math.cos(halfYaw),
+    rx: 0, ry: sinH, rz: 0, rw: cosH,
     velocity: speed,
     wheels,
   });
