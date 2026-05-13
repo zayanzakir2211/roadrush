@@ -1,0 +1,6 @@
+name = "multiplayer-car-game-frontend"
+pages_build_output_dir = "dist"
+
+[env.production]
+# Set VITE_WORKER_URL in the Cloudflare Pages dashboard
+# Example: https://multiplayer-car-game-backend.your-subdomain.workers.dev

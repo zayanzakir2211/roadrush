@@ -1,0 +1,14 @@
+{
+  "name": "multiplayer-car-game-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cloudflare Workers backend for multiplayer car game",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "multiplayer-car-game-frontend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Three.js multiplayer car game frontend",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "wrangler pages deploy dist"
+  },
+  "dependencies": {
+    "three": "^0.167.0",
+    "simplex-noise": "^4.0.1",
+    "@dimforge/rapier3d": "^0.12.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "wrangler": "^3.0.0"
+  }
+}
