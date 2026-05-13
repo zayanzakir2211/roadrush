@@ -1,4 +1,4 @@
-name = "multiplayer-car-game-frontend"
+name = "roadrush"
 pages_build_output_dir = "dist"
 
 [env.production]
