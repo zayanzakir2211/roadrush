@@ -75,11 +75,12 @@ function createVehicle(cfg) {
 
   const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
     .setTranslation(cfg.position?.x ?? 0, (cfg.position?.y ?? 2) + 1, cfg.position?.z ?? 0)
-    .setLinearDamping(0.3)
-    .setAngularDamping(2.5)
+    .setLinearDamping(0.6)    // strong linear drag base
+    .setAngularDamping(8.0)   // very high — kills spin immediately
     .setAdditionalMass(cfg.mass ?? 1200);
 
   vehicleBody = world.createRigidBody(bodyDesc);
+  // Lock X/Z rotation completely — no flipping, no rolling
   vehicleBody.setEnabledRotations(false, true, false, true);
 
   world.createCollider(
@@ -123,40 +124,61 @@ function stepPhysics() {
   const rot   = vehicleBody.rotation();
   const quat  = { x: rot.x, y: rot.y, z: rot.z, w: rot.w };
   const vel   = vehicleBody.linvel();
-  const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+  const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z); // m/s
+  const kmh   = speed * 3.6;
+
   const fwd   = rotateVec3({ x: 0, y: 0, z: 1 }, quat);
   const right = rotateVec3({ x: 1, y: 0, z: 0 }, quat);
 
-  // Engine force
+  // ── Engine: only apply force up to speed cap ──────────────────────────────
+  const MAX_SPEED_MS = 28;   // ~100 km/h hard cap
+  const speedRatio   = Math.max(0, 1 - speed / MAX_SPEED_MS);
+  const engineForce  = vehicleDef.engineForce * inputThrottle * speedRatio * 0.4;
   vehicleBody.addForce(
-    { x: fwd.x * vehicleDef.engineForce * inputThrottle, y: 0, z: fwd.z * vehicleDef.engineForce * inputThrottle },
+    { x: fwd.x * engineForce, y: 0, z: fwd.z * engineForce },
     true
   );
 
-  // Steering torque — speed-scaled to prevent standstill spin-outs
-  vehicleBody.addTorque(
-    { x: 0, y: inputSteer * clamp(speed * 120 + 200, 200, 900), z: 0 },
-    true
-  );
+  // ── Steering: yaw rate control, not raw torque ────────────────────────────
+  // Target yaw rate proportional to steer input and speed
+  const angVel     = vehicleBody.angvel();
+  const yawRate    = angVel.y;
+  const maxYawRate = 1.2 * (1 - speed / (MAX_SPEED_MS * 2)); // slower at speed
+  const targetYaw  = inputSteer * Math.max(0.2, maxYawRate);
+  const yawError   = targetYaw - yawRate;
+  // Only steer if actually moving (>2 km/h)
+  if (kmh > 2) {
+    vehicleBody.addTorque({ x: 0, y: yawError * 800, z: 0 }, true);
+  }
 
-  // Lateral friction — stops sideways sliding
+  // ── Strong lateral friction — the key to non-icy handling ─────────────────
   const lat = right.x * vel.x + right.z * vel.z;
   vehicleBody.addForce(
-    { x: -right.x * lat * 2400, y: 0, z: -right.z * lat * 2400 },
+    { x: -right.x * lat * 3500, y: 0, z: -right.z * lat * 3500 },
     true
   );
 
-  // Brake
+  // ── Natural drag (air resistance) ─────────────────────────────────────────
+  vehicleBody.addForce(
+    { x: -vel.x * speed * 2.5, y: 0, z: -vel.z * speed * 2.5 },
+    true
+  );
+
+  // ── Brake ─────────────────────────────────────────────────────────────────
   if (inputBrake > 0) {
     vehicleBody.addForce(
-      { x: -vel.x * vehicleDef.brakeForce * inputBrake * 3, y: 0, z: -vel.z * vehicleDef.brakeForce * inputBrake * 3 },
+      {
+        x: -vel.x * vehicleDef.brakeForce * inputBrake * 4,
+        y: 0,
+        z: -vel.z * vehicleDef.brakeForce * inputBrake * 4,
+      },
       true
     );
   }
 
-  // Speed cap (~180 km/h)
-  if (speed > 50) {
-    const s = 50 / speed;
+  // ── Absolute speed cap ────────────────────────────────────────────────────
+  if (speed > MAX_SPEED_MS) {
+    const s = MAX_SPEED_MS / speed;
     vehicleBody.setLinvel({ x: vel.x * s, y: vel.y, z: vel.z * s }, true);
   }
 
