@@ -8,6 +8,7 @@
  * autoplay policies.
  */
 
+
 export class AudioManager {
   constructor(camera) {
     this.camera = camera;
