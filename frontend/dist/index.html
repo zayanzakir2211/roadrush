@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin" />
+  <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp" />
+  <title>RoadRush — Multiplayer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #0a0a0f;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #fff;
+      touch-action: none;
+    }
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+    #canvas-container canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+      touch-action: none;
+    }
+    /* Loading screen shown until game starts */
+    #loading-screen {
+      position: fixed;
+      inset: 0;
+      background: #0a0a0f;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      gap: 24px;
+    }
+    #loading-screen h1 {
+      font-size: 3rem;
+      font-weight: 800;
+      letter-spacing: -2px;
+      background: linear-gradient(135deg, #ff6b35, #f7c59f);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    #loading-bar-container {
+      width: 300px;
+      height: 4px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #loading-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #ff6b35, #f7c59f);
+      width: 0%;
+      transition: width 0.3s ease;
+      border-radius: 2px;
+    }
+    #loading-status {
+      font-size: 0.875rem;
+      color: rgba(255,255,255,0.5);
+    }
+  </style>
+  <script type="module" crossorigin src="/assets/main-BE2UICyj.js"></script>
+</head>
+<body>
+  <!-- Loading screen shown while WASM + assets load -->
+  <div id="loading-screen">
+    <h1>ROADRUSH</h1>
+    <div id="loading-bar-container">
+      <div id="loading-bar"></div>
+    </div>
+    <div id="loading-status">Initializing…</div>
+  </div>
+
+  <!-- Three.js canvas will be inserted here -->
+  <div id="canvas-container"></div>
+
+  <!-- HUD overlay (populated by ui.js) -->
+  <div id="hud"></div>
+
+  <!-- Main menu overlay (populated by ui.js) -->
+  <div id="main-menu"></div>
+
+  <!-- Settings panel (populated by ui.js) -->
+  <div id="settings-panel"></div>
+
+  <!-- Mobile controls (populated by ui.js) -->
+  <div id="mobile-controls"></div>
+
+</body>
+</html>
