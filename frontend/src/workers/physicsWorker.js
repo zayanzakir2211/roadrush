@@ -128,27 +128,27 @@ function stepPhysics() {
   const right = rotateVec3({ x: 1, y: 0, z: 0 }, quat);
 
   // Engine force
-  vehicleBody.applyForce(
+  vehicleBody.addForce(
     { x: fwd.x * vehicleDef.engineForce * inputThrottle, y: 0, z: fwd.z * vehicleDef.engineForce * inputThrottle },
     true
   );
 
   // Steering torque — speed-scaled to prevent standstill spin-outs
-  vehicleBody.applyTorque(
+  vehicleBody.addTorque(
     { x: 0, y: inputSteer * clamp(speed * 120 + 200, 200, 900), z: 0 },
     true
   );
 
   // Lateral friction — stops sideways sliding
   const lat = right.x * vel.x + right.z * vel.z;
-  vehicleBody.applyForce(
+  vehicleBody.addForce(
     { x: -right.x * lat * 2400, y: 0, z: -right.z * lat * 2400 },
     true
   );
 
   // Brake
   if (inputBrake > 0) {
-    vehicleBody.applyForce(
+    vehicleBody.addForce(
       { x: -vel.x * vehicleDef.brakeForce * inputBrake * 3, y: 0, z: -vel.z * vehicleDef.brakeForce * inputBrake * 3 },
       true
     );
