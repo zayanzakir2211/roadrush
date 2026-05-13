@@ -55,8 +55,15 @@ async function initRapier() {
 
 function buildWorld() {
   world = new RAPIER.World({ x: 0, y: -20, z: 0 });
-  const groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  world.createCollider(RAPIER.ColliderDesc.halfSpace({ x: 0, y: 1, z: 0 }), groundBody);
+
+  // halfSpace is not available in rapier3d-compat 0.12 — use a large flat cuboid instead
+  const groundBody = world.createRigidBody(
+    RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.1, 0)
+  );
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(10000, 0.1, 10000).setFriction(0.8),
+    groundBody
+  );
 }
 
 // ── Vehicle ──────────────────────────────────────────────────────────────────
