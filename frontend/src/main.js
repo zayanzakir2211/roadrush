@@ -146,7 +146,7 @@ async function startGame({ seed, vehicleType, playerName }) {
   await localVehicle.load();
 
   // Connect to backend WebSocket
-  const workerUrl = import.meta.env.VITE_WORKER_URL || '';
+  const workerUrl = import.meta.env.VITE_WORKER_URL || 'https://roadrush.zayanzakir.workers.dev';
   networkManager = new NetworkManager(workerUrl, seed, vehicleType);
   networkManager.onPlayerJoined = (playerData) => {
     remotePlayerManager.addPlayer(playerData);
