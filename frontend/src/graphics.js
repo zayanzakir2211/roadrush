@@ -5,7 +5,7 @@
  * Quality presets control shadow resolution, antialiasing, render distance,
  * bloom, ambient occlusion, and particle density.
  */
-
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -137,7 +137,7 @@ function setupEnvironmentMap(scene, renderer) {
 
   // Use a hemisphere light gradient encoded into a tiny cube map
   const rt = pmremGenerator.fromScene(
-    new THREE.RoomEnvironment(),
+    new RoomEnvironment(),
     0.04
   );
   scene.environment = rt.texture;
