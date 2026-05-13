@@ -144,6 +144,7 @@ function setupEnvironmentMap(scene, renderer) {
   pmremGenerator.dispose();
 }
 
+
 // ── Lighting ──────────────────────────────────────────────────────────────────
 
 function setupLighting(scene) {
