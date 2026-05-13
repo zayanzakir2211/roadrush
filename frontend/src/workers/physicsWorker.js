@@ -14,7 +14,8 @@
  *   { type: 'pause' / 'resume' }  — pause/resume simulation
  */
 
-let RAPIER = null;
+import * as RAPIER from '@dimforge/rapier3d';
+
 let world = null;
 let vehicleBody = null;
 let vehicleController = null;
@@ -51,7 +52,7 @@ self.onmessage = async (e) => {
       break;
 
     case 'createVehicle':
-      if (RAPIER && world) {
+      if (world) {
         createVehicle(msg);
       }
       break;
@@ -63,7 +64,7 @@ self.onmessage = async (e) => {
       break;
 
     case 'addTrimesh':
-      if (RAPIER && world && msg.vertices && msg.indices) {
+      if (world && msg.vertices && msg.indices) {
         addTrimesh(msg.vertices, msg.indices, msg.offsetX ?? 0, msg.offsetZ ?? 0);
       }
       break;
@@ -82,7 +83,7 @@ self.onmessage = async (e) => {
 
 async function initRapier() {
   try {
-    RAPIER = await import('@dimforge/rapier3d');
+    await RAPIER.init();
 
     // Create physics world with standard gravity
     const gravity = { x: 0, y: -20, z: 0 };
@@ -99,7 +100,6 @@ async function initRapier() {
 
     self.postMessage({ type: 'ready' });
   } catch (err) {
-    // Rapier WASM may not be available in all environments
     console.error('[PhysicsWorker] Failed to init Rapier:', err);
     // Fall back: simulate simple position update without real physics
     stepIntervalId = setInterval(stepFallback, FIXED_DT * 1000);
@@ -134,9 +134,6 @@ function createVehicle(cfg) {
     .setTranslation(0, 0.4, 0);
 
   world.createCollider(chassisCollider, vehicleBody);
-
-  // Rapier's built-in dynamic character controller used as a vehicle approximation.
-  // (Full vehicle controller requires Rapier Enterprise; we simulate wheels manually.)
 }
 
 // ── Terrain trimesh ───────────────────────────────────────────────────────────
@@ -170,7 +167,6 @@ const WHEEL_OFFSETS = [
 
 function stepPhysics() {
   if (paused || !world || !vehicleBody) {
-    // If no vehicle yet, still advance world to keep it alive
     if (world && !paused) world.step();
     return;
   }
@@ -182,7 +178,6 @@ function stepPhysics() {
 
   // Forward vector in world space
   const fwd = rotateVec3({ x: 0, y: 0, z: 1 }, quat);
-  const right = rotateVec3({ x: 1, y: 0, z: 0 }, quat);
 
   // Engine force along forward
   const forceScale = vehicleDef.engineForce * inputThrottle;
