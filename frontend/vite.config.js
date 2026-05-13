@@ -1,11 +1,13 @@
 import { defineConfig } from 'vite';
 import path from 'path';
-import wasm from 'vite-plugin-wasm';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [wasm()],
   root: '.',
   publicDir: 'public',
+
   build: {
     outDir: 'dist',
     target: 'esnext',
@@ -16,13 +18,18 @@ export default defineConfig({
       },
     },
   },
+
+  // rapier3d-compat bundles WASM as base64 — no plugin or special handling needed.
+  // Excluding it from pre-bundling avoids Vite trying to transform it.
   optimizeDeps: {
-    exclude: ['@dimforge/rapier3d'],
+    exclude: ['@dimforge/rapier3d-compat'],
   },
+
   worker: {
     format: 'es',
-    plugins: () => [wasm()],
+    // No plugins needed — compat build is plain JS + inlined WASM
   },
+
   server: {
     port: 3000,
     headers: {
