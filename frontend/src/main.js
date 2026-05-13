@@ -113,7 +113,7 @@ async function boot() {
 
 async function fetchRandomSeed() {
   try {
-    const workerUrl = import.meta.env.VITE_WORKER_URL || '';
+   const workerUrl = import.meta.env.VITE_WORKER_URL || 'https://roadrush.zayanzakir.workers.dev';
     const res = await fetch(`${workerUrl}/seed/random`);
     const data = await res.json();
     return data.seed;
