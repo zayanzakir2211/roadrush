@@ -9,6 +9,7 @@
  * Chunk size: 64 × 64 world units, subdivided into 32 × 32 quads.
  */
 
+
 import { createNoise2D } from 'simplex-noise';
 
 const CHUNK_SIZE = 64;
