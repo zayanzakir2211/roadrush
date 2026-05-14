@@ -5,8 +5,8 @@
  * Quality presets control shadow resolution, antialiasing, render distance,
  * bloom, ambient occlusion, and particle density.
  */
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as THREE from 'three';
+import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -15,14 +15,22 @@ import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
 
 // ── Quality preset definitions ───────────────────────────────────────────────
 
-const SKY_GRADIENT = {
-  top: '#8fc6ff',
-  mid: '#f7e2c0',
-  bottom: '#fff2e6',
+const FOG_COLOR = new THREE.Color(0xe3f0ff);
+const SKY_SETTINGS = {
+  turbidity: 2.6,
+  rayleigh: 1.8,
+  mieCoefficient: 0.005,
+  mieDirectionalG: 0.82,
+  elevation: 38,
+  azimuth: 180,
 };
 
-const FOG_COLOR = new THREE.Color(0xf4e3c9);
-let skyTexture = null;
+let sky = null;
+let sunVector = new THREE.Vector3();
+let pmremGenerator = null;
+let skyEnv = null;
+let fxaaPass = null;
+let bloomPass = null;
 
 export const QUALITY_PRESETS = {
   low: {
@@ -105,13 +113,12 @@ export function setupRenderer() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.0;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  skyTexture = createSkyGradientTexture();
-  scene.background = skyTexture;
-  scene.fog = new THREE.Fog(FOG_COLOR, 180, 520);
+  scene.background = null;
+  scene.fog = new THREE.Fog(FOG_COLOR, 180, 700);
 
   const camera = new THREE.PerspectiveCamera(
     65,
@@ -121,8 +128,8 @@ export function setupRenderer() {
   );
   camera.position.set(0, 8, -15);
 
-  // Environment map for reflective car paint
-  setupEnvironmentMap(scene, renderer);
+  // Sky + environment lighting
+  setupSky(scene, renderer);
 
   // Lighting
   setupLighting(scene);
@@ -135,47 +142,41 @@ export function setupRenderer() {
   return { renderer, scene, camera };
 }
 
-// ── Sky gradient texture ───────────────────────────────────────────────────
+// ── Sky + environment ──────────────────────────────────────────────────────
 
-function createSkyGradientTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 8;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d');
+function setupSky(scene, renderer) {
+  sky = new Sky();
+  sky.scale.setScalar(450000);
+  scene.add(sky);
 
-  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  grad.addColorStop(0.0, SKY_GRADIENT.top);
-  grad.addColorStop(0.55, SKY_GRADIENT.mid);
-  grad.addColorStop(1.0, SKY_GRADIENT.bottom);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const uniforms = sky.material.uniforms;
+  uniforms['turbidity'].value = SKY_SETTINGS.turbidity;
+  uniforms['rayleigh'].value = SKY_SETTINGS.rayleigh;
+  uniforms['mieCoefficient'].value = SKY_SETTINGS.mieCoefficient;
+  uniforms['mieDirectionalG'].value = SKY_SETTINGS.mieDirectionalG;
 
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  return tex;
+  pmremGenerator = new THREE.PMREMGenerator(renderer);
+  updateSkyEnvironment(scene, renderer);
 }
 
-// ── Environment map (procedural sky cube for reflections) ────────────────────
+function updateSkyEnvironment(scene, renderer) {
+  const phi = THREE.MathUtils.degToRad(90 - SKY_SETTINGS.elevation);
+  const theta = THREE.MathUtils.degToRad(SKY_SETTINGS.azimuth);
+  sunVector.setFromSphericalCoords(1, phi, theta);
 
-function setupEnvironmentMap(scene, renderer) {
-  // Simple procedural sky gradient used as envMap for reflections
-  const pmremGenerator = new THREE.PMREMGenerator(renderer);
-  pmremGenerator.compileEquirectangularShader();
+  if (sky) {
+    sky.material.uniforms['sunPosition'].value.copy(sunVector);
+  }
 
-  const skyColor = new THREE.Color(0x87ceeb);
-  const groundColor = new THREE.Color(0x4a7c4e);
+  if (sunLight) {
+    sunLight.position.copy(sunVector).multiplyScalar(400);
+  }
 
-  // Use a hemisphere light gradient encoded into a tiny cube map
-  const rt = pmremGenerator.fromScene(
-    new RoomEnvironment(),
-    0.04
-  );
-  scene.environment = rt.texture;
-  pmremGenerator.dispose();
+  if (pmremGenerator && sky) {
+    if (skyEnv) skyEnv.dispose();
+    skyEnv = pmremGenerator.fromScene(sky);
+    scene.environment = skyEnv.texture;
+  }
 }
 
 
@@ -183,11 +184,11 @@ function setupEnvironmentMap(scene, renderer) {
 
 function setupLighting(scene) {
   // Hemisphere (sky/ground)
-  const hemi = new THREE.HemisphereLight(0xbfd9ff, 0xf0c89d, 0.55);
+  const hemi = new THREE.HemisphereLight(0xcfe5ff, 0xd9c3a8, 0.6);
   scene.add(hemi);
 
   // Sun (directional + shadows)
-  sunLight = new THREE.DirectionalLight(0xfff0d8, 1.1);
+  sunLight = new THREE.DirectionalLight(0xffffff, 1.15);
   sunLight.position.set(50, 100, 50);
   sunLight.castShadow = true;
   sunLight.shadow.camera.near = 1;
@@ -197,11 +198,12 @@ function setupLighting(scene) {
   sunLight.shadow.camera.top = 100;
   sunLight.shadow.camera.bottom = -100;
   sunLight.shadow.mapSize.set(2048, 2048);
-  sunLight.shadow.bias = -0.001;
+  sunLight.shadow.bias = -0.0004;
+  sunLight.shadow.normalBias = 0.02;
   scene.add(sunLight);
 
   // Ambient fill
-  ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+  ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
   scene.add(ambientLight);
 }
 
@@ -231,10 +233,6 @@ export function setQualityPreset(presetName, renderer, scene) {
     scene.fog = null;
   }
 
-  if (skyTexture) {
-    scene.background = skyTexture;
-  }
-
   // Postprocessing passes — rebuild composer
   if (composer) {
     // Remove existing passes after RenderPass
@@ -243,8 +241,11 @@ export function setQualityPreset(presetName, renderer, scene) {
     }
 
     // FXAA
+    fxaaPass = null;
+    bloomPass = null;
+
     if (preset.aa === 'FXAA') {
-      const fxaaPass = new ShaderPass(FXAAShader);
+      fxaaPass = new ShaderPass(FXAAShader);
       fxaaPass.material.uniforms['resolution'].value.set(
         1 / window.innerWidth,
         1 / window.innerHeight
@@ -254,11 +255,11 @@ export function setQualityPreset(presetName, renderer, scene) {
 
     // Bloom (high/ultra)
     if (preset.bloom) {
-      const bloomPass = new UnrealBloomPass(
+      bloomPass = new UnrealBloomPass(
         new THREE.Vector2(window.innerWidth, window.innerHeight),
-        0.3,  // strength
-        0.4,  // radius
-        0.85  // threshold
+        0.38,  // strength
+        0.45,  // radius
+        0.78  // threshold
       );
       composer.addPass(bloomPass);
     }
@@ -268,6 +269,18 @@ export function setQualityPreset(presetName, renderer, scene) {
   window.dispatchEvent(
     new CustomEvent('qualityChanged', { detail: { preset: presetName, settings: preset } })
   );
+
+  if (sky) {
+    updateSkyEnvironment(scene, renderer);
+  }
+}
+
+export function resizePostFX(width, height) {
+  if (composer) composer.setSize(width, height);
+  if (fxaaPass) {
+    fxaaPass.material.uniforms['resolution'].value.set(1 / width, 1 / height);
+  }
+  if (bloomPass) bloomPass.setSize(width, height);
 }
 
 // ── GPU tier detection ────────────────────────────────────────────────────────
@@ -331,15 +344,10 @@ export function updateDayNight(delta, scene) {
 
     // Sky and fog colour transitions
     const t = Math.max(0, Math.sin(angle)); // 0 at night, 1 at noon
-    const skyDay = new THREE.Color(0x87ceeb);
-    const skyNight = new THREE.Color(0x050a1a);
-    const skyColour = skyNight.lerp(skyDay, t);
-
-    scene.background = skyColour;
-    if (scene.fog) scene.fog.color.copy(skyColour);
+    if (scene.fog) scene.fog.color.copy(FOG_COLOR);
 
     // Sun intensity
-    sunLight.intensity = t * 1.5;
-    if (ambientLight) ambientLight.intensity = 0.1 + t * 0.4;
+    sunLight.intensity = 0.9 + t * 0.35;
+    if (ambientLight) ambientLight.intensity = 0.35 + t * 0.25;
   }
 }

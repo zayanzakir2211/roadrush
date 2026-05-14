@@ -121,8 +121,9 @@ export class WorldManager {
 
       const mat = new THREE.MeshStandardMaterial({
         vertexColors: true,
-        roughness: 0.88,
+        roughness: 0.95,
         metalness: 0.0,
+        envMapIntensity: 0.25,
       });
 
       const mesh = new THREE.Mesh(geo, mat);

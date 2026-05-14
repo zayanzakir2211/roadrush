@@ -13,7 +13,7 @@
  */
 
 import * as THREE from 'three';
-import { setupRenderer, setQualityPreset, detectGPUTier } from './graphics.js';
+import { setupRenderer, setQualityPreset, detectGPUTier, composer, resizePostFX } from './graphics.js';
 import { createUI, showMainMenu, hideMainMenu, updateHUD, showSettings, setTeleportCallback } from './ui.js';
 import { SeedManager } from './seed.js';
 import { NetworkManager } from './network.js';
@@ -412,7 +412,11 @@ function gameLoop(timestamp) {
   audioManager.update(localVehicle ? localVehicle.getSpeed() : 0, delta);
 
   // Render frame
-  renderer.render(scene, camera);
+  if (composer) {
+    composer.render();
+  } else {
+    renderer.render(scene, camera);
+  }
 
   requestAnimationFrame(gameLoop);
 }
@@ -459,6 +463,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  resizePostFX(w, h);
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────

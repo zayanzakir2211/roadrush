@@ -87,25 +87,25 @@ const ROAD_SHOULDER = 4;    // flat shoulder
 const ROAD_TOTAL    = ROAD_WIDTH + ROAD_SHOULDER;
 
 const PALETTE = {
-  roadDark:  { r: 0.19, g: 0.20, b: 0.22 },
-  roadLight: { r: 0.26, g: 0.26, b: 0.27 },
-  roadLine:  { r: 0.94, g: 0.86, b: 0.66 },
-  roadEdge:  { r: 0.90, g: 0.90, b: 0.90 },
-  grassLow:  { r: 0.36, g: 0.58, b: 0.36 },
-  grassHigh: { r: 0.25, g: 0.48, b: 0.34 },
-  soil:      { r: 0.56, g: 0.50, b: 0.40 },
-  sand:      { r: 0.82, g: 0.73, b: 0.55 },
-  rock:      { r: 0.60, g: 0.58, b: 0.54 },
-  snow:      { r: 0.92, g: 0.93, b: 0.95 },
+  roadDark:  { r: 0.26, g: 0.26, b: 0.27 },
+  roadLight: { r: 0.34, g: 0.34, b: 0.35 },
+  roadLine:  { r: 0.96, g: 0.94, b: 0.88 },
+  roadEdge:  { r: 0.92, g: 0.92, b: 0.92 },
+  grassLow:  { r: 0.52, g: 0.72, b: 0.36 },
+  grassHigh: { r: 0.36, g: 0.62, b: 0.38 },
+  soil:      { r: 0.62, g: 0.56, b: 0.44 },
+  sand:      { r: 0.86, g: 0.80, b: 0.62 },
+  rock:      { r: 0.68, g: 0.66, b: 0.62 },
+  snow:      { r: 0.94, g: 0.95, b: 0.97 },
 };
 
 function roadCenterX(worldZ) {
-  return noise2D3(worldZ * 0.003, 0.0) * 40
-       + noise2D3(worldZ * 0.007, 10.0) * 15;
+  return noise2D3(worldZ * 0.0018, 0.0) * 60
+    + noise2D3(worldZ * 0.0038, 10.0) * 20;
 }
 function roadCenterZ(worldX) {
-  return noise2D3(0.0, worldX * 0.003) * 40
-       + noise2D3(10.0, worldX * 0.007) * 15;
+  return noise2D3(0.0, worldX * 0.0018) * 60
+    + noise2D3(10.0, worldX * 0.0038) * 20;
 }
 
 function roadInfo(worldX, worldZ) {
