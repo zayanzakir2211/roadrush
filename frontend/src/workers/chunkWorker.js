@@ -14,6 +14,8 @@ import { createNoise2D } from 'simplex-noise';
 const CHUNK_SIZE   = 64;
 const SUBDIVISIONS = 96;          // ↑ from 48: much smoother/denser terrain
 const CELL_SIZE    = CHUNK_SIZE / SUBDIVISIONS;
+const PHYSICS_SUBDIVISIONS = 24;  // lower-res mesh for physics colliders
+const PHYSICS_CELL_SIZE    = CHUNK_SIZE / PHYSICS_SUBDIVISIONS;
 
 let noise2D  = null;   // fine detail / terrain
 let noise2D2 = null;   // coarse biome
@@ -48,6 +50,8 @@ self.onmessage = (e) => {
       result.vertices.buffer,
       result.indices.buffer,
       result.colors.buffer,
+      result.physicsVertices.buffer,
+      result.physicsIndices.buffer,
     ]);
   }
 };
@@ -240,7 +244,56 @@ function generateChunk(cx, cz) {
   }
 
   const objectData = generateObjects(cx, cz);
-  return { type: 'chunkReady', cx, cz, vertices, indices, colors, objectData };
+  const physics = generatePhysicsMesh(cx, cz);
+  return {
+    type: 'chunkReady',
+    cx,
+    cz,
+    vertices,
+    indices,
+    colors,
+    objectData,
+    physicsVertices: physics.vertices,
+    physicsIndices: physics.indices,
+  };
+}
+
+// ── Physics mesh (low-res) ───────────────────────────────────────────────────
+
+function generatePhysicsMesh(cx, cz) {
+  const stride = PHYSICS_SUBDIVISIONS + 1;
+  const verts  = stride * stride;
+  const vertices = new Float32Array(verts * 3);
+
+  let vi = 0;
+  for (let row = 0; row <= PHYSICS_SUBDIVISIONS; row++) {
+    for (let col = 0; col <= PHYSICS_SUBDIVISIONS; col++) {
+      const localX = col * PHYSICS_CELL_SIZE;
+      const localZ = row * PHYSICS_CELL_SIZE;
+      const worldX = cx * CHUNK_SIZE + localX;
+      const worldZ = cz * CHUNK_SIZE + localZ;
+      const y      = getHeight(worldX, worldZ);
+
+      vertices[vi++] = localX;
+      vertices[vi++] = y;
+      vertices[vi++] = localZ;
+    }
+  }
+
+  const indices = new Uint32Array(PHYSICS_SUBDIVISIONS * PHYSICS_SUBDIVISIONS * 6);
+  let ii = 0;
+  for (let row = 0; row < PHYSICS_SUBDIVISIONS; row++) {
+    for (let col = 0; col < PHYSICS_SUBDIVISIONS; col++) {
+      const tl = row * stride + col;
+      const tr = tl + 1;
+      const bl = tl + stride;
+      const br = bl + 1;
+      indices[ii++] = tl; indices[ii++] = bl; indices[ii++] = tr;
+      indices[ii++] = tr; indices[ii++] = bl; indices[ii++] = br;
+    }
+  }
+
+  return { vertices, indices };
 }
 
 // ── Object placement ──────────────────────────────────────────────────────────

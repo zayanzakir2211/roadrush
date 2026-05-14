@@ -45,6 +45,9 @@ export class WorldManager {
   init(seed) {
     this.seed = seed;
     this.chunks.clear();
+    if (this.physicsWorker) {
+      this.physicsWorker.postMessage({ type: 'clearTerrain' });
+    }
     this.chunkWorker.postMessage({ type: 'setSeed', seed });
   }
 
@@ -78,6 +81,10 @@ export class WorldManager {
 
     for (const [ck, chunk] of this.chunks) {
       if (!desired.has(ck)) {
+        const [rcx, rcz] = ck.split(',').map(Number);
+        if (this.physicsWorker) {
+          this.physicsWorker.postMessage({ type: 'removeTrimesh', cx: rcx, cz: rcz });
+        }
         if (chunk.mesh) {
           this.scene.remove(chunk.mesh);
           this._disposeMesh(chunk.mesh);
@@ -100,7 +107,7 @@ export class WorldManager {
     const msg = e.data;
 
     if (msg.type === 'chunkReady') {
-      const { cx, cz, vertices, indices, colors, objectData } = msg;
+      const { cx, cz, vertices, indices, colors, objectData, physicsVertices, physicsIndices } = msg;
       const key = `${cx},${cz}`;
       const entry = this.chunks.get(key);
       if (!entry) return;
@@ -129,18 +136,28 @@ export class WorldManager {
 
       // ── Send trimesh to physics worker for solid collision ────────────────
       if (this.physicsWorker) {
-        // Transfer copies (can't transfer and keep using in main thread)
-        const vCopy = new Float32Array(vertices);
-        const iCopy = new Uint32Array(indices);
+        let vData = physicsVertices;
+        let iData = physicsIndices;
+        let transfer = [];
+
+        if (vData && iData) {
+          transfer = [vData.buffer, iData.buffer];
+        } else {
+          // Fallback if physics mesh is not provided
+          vData = new Float32Array(vertices);
+          iData = new Uint32Array(indices);
+          transfer = [vData.buffer, iData.buffer];
+        }
+
         this.physicsWorker.postMessage({
           type: 'addTrimesh',
-          vertices: vCopy,
-          indices: iCopy,
+          vertices: vData,
+          indices: iData,
           cx,
           cz,
           offsetX: cx * CHUNK_SIZE,
           offsetZ: cz * CHUNK_SIZE,
-        }, [vCopy.buffer, iCopy.buffer]);
+        }, transfer);
       }
 
       if (objectData && objectData.length > 0) {

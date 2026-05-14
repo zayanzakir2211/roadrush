@@ -22,7 +22,7 @@ const FIXED_DT = 1 / 60;
 let vehicleDef = { engineForce: 3500, brakeForce: 200, maxSteer: 0.5 };
 
 // Track terrain chunks added to physics
-const addedChunks = new Set();
+const chunkBodies = new Map();
 
 // ── Message handler ──────────────────────────────────────────────────────────
 
@@ -49,7 +49,10 @@ self.onmessage = async (e) => {
       }
       break;
     case "removeTrimesh":
-      // handled via chunk key tracking — we don't remove in Rapier easily, so just leave them
+      if (world) removeTrimesh(msg.cx ?? 0, msg.cz ?? 0);
+      break;
+    case "clearTerrain":
+      if (world) clearTerrain();
       break;
     case "teleport":
       if (vehicleBody && msg.position) {
@@ -125,8 +128,7 @@ function createVehicle(cfg) {
 
 function addTrimesh(vertices, indices, cx, cz, offsetX, offsetZ) {
   const chunkKey = `${cx},${cz}`;
-  if (addedChunks.has(chunkKey)) return; // already added
-  addedChunks.add(chunkKey);
+  if (chunkBodies.has(chunkKey)) return; // already added
 
   // Shift vertices by chunk world offset
   const shifted = new Float32Array(vertices.length);
@@ -138,16 +140,48 @@ function addTrimesh(vertices, indices, cx, cz, offsetX, offsetZ) {
 
   try {
     const terrainBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-    world.createCollider(
+    const collider = world.createCollider(
       RAPIER.ColliderDesc.trimesh(shifted, new Uint32Array(indices))
         .setFriction(0.8)
         .setRestitution(0.02),
       terrainBody
     );
+    chunkBodies.set(chunkKey, { body: terrainBody, collider });
   } catch (err) {
     // Trimesh may fail on degenerate geometry — silently ignore
     console.warn('[PhysicsWorker] trimesh failed for chunk', chunkKey, err.message);
   }
+}
+
+function removeTrimesh(cx, cz) {
+  const chunkKey = `${cx},${cz}`;
+  const entry = chunkBodies.get(chunkKey);
+  if (!entry) return;
+  try {
+    if (world.removeRigidBody && entry.body) {
+      world.removeRigidBody(entry.body);
+    } else if (world.removeCollider && entry.collider) {
+      world.removeCollider(entry.collider, true);
+    }
+  } catch (err) {
+    console.warn('[PhysicsWorker] remove trimesh failed for chunk', chunkKey, err.message);
+  }
+  chunkBodies.delete(chunkKey);
+}
+
+function clearTerrain() {
+  for (const [chunkKey, entry] of chunkBodies.entries()) {
+    try {
+      if (world.removeRigidBody && entry.body) {
+        world.removeRigidBody(entry.body);
+      } else if (world.removeCollider && entry.collider) {
+        world.removeCollider(entry.collider, true);
+      }
+    } catch (err) {
+      console.warn('[PhysicsWorker] clear trimesh failed for chunk', chunkKey, err.message);
+    }
+  }
+  chunkBodies.clear();
 }
 
 // ── Physics step ─────────────────────────────────────────────────────────────

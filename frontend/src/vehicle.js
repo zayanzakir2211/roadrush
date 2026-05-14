@@ -82,6 +82,18 @@ class InputState {
     this._bindKeyboard();
   }
 
+  _reset() {
+    this.forward = false;
+    this.backward = false;
+    this.left = false;
+    this.right = false;
+    this.brake = false;
+    this.steerAxis = 0;
+    this.throttleAxis = 0;
+    this.mobileLeft = false;
+    this.mobileRight = false;
+  }
+
   _bindKeyboard() {
     window.addEventListener('keydown', (e) => {
       switch (e.code) {
@@ -101,6 +113,11 @@ class InputState {
         case 'ArrowRight': case 'KeyD': this.right = false; break;
         case 'Space': this.brake = false; break;
       }
+    });
+
+    window.addEventListener('blur', () => this._reset());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this._reset();
     });
   }
 
@@ -159,6 +176,7 @@ export class LocalVehicle {
     this.rotation = new THREE.Quaternion();
     this.velocity = 0;
     this.speed = 0;
+    this.inputSpeedKmh = null;
 
     this.input = new InputState();
     window.__vehicleInput = this.input;
@@ -272,7 +290,8 @@ export class LocalVehicle {
 
   update(delta) {
     // Update speed for S-brake logic
-    this.input._currentSpeedKmh = this.speed;
+    const speedForInput = this.inputSpeedKmh !== null ? this.inputSpeedKmh : this.speed;
+    this.input._currentSpeedKmh = speedForInput;
 
     this.physicsWorker.postMessage({
       type: 'input',
@@ -334,6 +353,10 @@ export class LocalVehicle {
       velocity: this.velocity,
       vehicleType: this.vehicleType,
     };
+  }
+
+  setInputSpeedKmh(speedKmh) {
+    this.inputSpeedKmh = speedKmh;
   }
 
   dispose() {

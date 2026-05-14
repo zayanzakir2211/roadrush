@@ -63,7 +63,7 @@ let physicsStateRaw = null;
 // Buffer of recent physics states for render interpolation
 const physicsBuffer = [];
 const PHYSICS_BUFFER_SIZE = 8;
-const PHYSICS_INTERP_DELAY = 50; // ms
+const PHYSICS_INTERP_DELAY = 35; // ms
 const _interpQuat0 = new THREE.Quaternion();
 const _interpQuat1 = new THREE.Quaternion();
 const _interpQuatOut = new THREE.Quaternion();
@@ -298,6 +298,11 @@ function gameLoop(timestamp) {
 
   // Update local vehicle (input handling)
   if (localVehicle) {
+    if (physicsStateRaw) {
+      localVehicle.setInputSpeedKmh(Math.abs(physicsStateRaw.velocity || 0) * 3.6);
+    } else {
+      localVehicle.setInputSpeedKmh(null);
+    }
     localVehicle.update(delta);
 
     // Send state to server at 20Hz
