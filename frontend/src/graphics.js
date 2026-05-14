@@ -15,6 +15,15 @@ import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
 
 // ── Quality preset definitions ───────────────────────────────────────────────
 
+const SKY_GRADIENT = {
+  top: '#8fc6ff',
+  mid: '#f7e2c0',
+  bottom: '#fff2e6',
+};
+
+const FOG_COLOR = new THREE.Color(0xf4e3c9);
+let skyTexture = null;
+
 export const QUALITY_PRESETS = {
   low: {
     shadows: false,
@@ -27,8 +36,8 @@ export const QUALITY_PRESETS = {
     physicsObjects: 20,
     bloom: false,
     fog: true,
-    fogNear: 40,
-    fogFar: 80,
+    fogNear: 140,
+    fogFar: 360,
   },
   medium: {
     shadows: true,
@@ -41,8 +50,8 @@ export const QUALITY_PRESETS = {
     physicsObjects: 50,
     bloom: false,
     fog: true,
-    fogNear: 80,
-    fogFar: 160,
+    fogNear: 180,
+    fogFar: 520,
   },
   high: {
     shadows: true,
@@ -55,8 +64,8 @@ export const QUALITY_PRESETS = {
     physicsObjects: 100,
     bloom: true,
     fog: true,
-    fogNear: 150,
-    fogFar: 300,
+    fogNear: 240,
+    fogFar: 800,
   },
   ultra: {
     shadows: true,
@@ -69,8 +78,8 @@ export const QUALITY_PRESETS = {
     physicsObjects: 200,
     bloom: true,
     fog: true,
-    fogNear: 250,
-    fogFar: 500,
+    fogNear: 300,
+    fogFar: 1100,
   },
 };
 
@@ -96,12 +105,13 @@ export function setupRenderer() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
+  renderer.toneMappingExposure = 1.05;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x87ceeb); // sky blue
-  scene.fog = new THREE.Fog(0x87ceeb, 80, 160);
+  skyTexture = createSkyGradientTexture();
+  scene.background = skyTexture;
+  scene.fog = new THREE.Fog(FOG_COLOR, 180, 520);
 
   const camera = new THREE.PerspectiveCamera(
     65,
@@ -123,6 +133,30 @@ export function setupRenderer() {
   composer.addPass(renderPass);
 
   return { renderer, scene, camera };
+}
+
+// ── Sky gradient texture ───────────────────────────────────────────────────
+
+function createSkyGradientTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 8;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0.0, SKY_GRADIENT.top);
+  grad.addColorStop(0.55, SKY_GRADIENT.mid);
+  grad.addColorStop(1.0, SKY_GRADIENT.bottom);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
 }
 
 // ── Environment map (procedural sky cube for reflections) ────────────────────
@@ -149,11 +183,11 @@ function setupEnvironmentMap(scene, renderer) {
 
 function setupLighting(scene) {
   // Hemisphere (sky/ground)
-  const hemi = new THREE.HemisphereLight(0x87ceeb, 0x4a7c4e, 0.6);
+  const hemi = new THREE.HemisphereLight(0xbfd9ff, 0xf0c89d, 0.55);
   scene.add(hemi);
 
   // Sun (directional + shadows)
-  sunLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
+  sunLight = new THREE.DirectionalLight(0xfff0d8, 1.1);
   sunLight.position.set(50, 100, 50);
   sunLight.castShadow = true;
   sunLight.shadow.camera.near = 1;
@@ -167,7 +201,7 @@ function setupLighting(scene) {
   scene.add(sunLight);
 
   // Ambient fill
-  ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+  ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
   scene.add(ambientLight);
 }
 
@@ -192,9 +226,13 @@ export function setQualityPreset(presetName, renderer, scene) {
 
   // Fog
   if (preset.fog) {
-    scene.fog = new THREE.Fog(0x87ceeb, preset.fogNear, preset.fogFar);
+    scene.fog = new THREE.Fog(FOG_COLOR, preset.fogNear, preset.fogFar);
   } else {
     scene.fog = null;
+  }
+
+  if (skyTexture) {
+    scene.background = skyTexture;
   }
 
   // Postprocessing passes — rebuild composer

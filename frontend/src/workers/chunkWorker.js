@@ -86,6 +86,19 @@ const ROAD_WIDTH    = 10;   // half-width driveable
 const ROAD_SHOULDER = 4;    // flat shoulder
 const ROAD_TOTAL    = ROAD_WIDTH + ROAD_SHOULDER;
 
+const PALETTE = {
+  roadDark:  { r: 0.19, g: 0.20, b: 0.22 },
+  roadLight: { r: 0.26, g: 0.26, b: 0.27 },
+  roadLine:  { r: 0.94, g: 0.86, b: 0.66 },
+  roadEdge:  { r: 0.90, g: 0.90, b: 0.90 },
+  grassLow:  { r: 0.36, g: 0.58, b: 0.36 },
+  grassHigh: { r: 0.25, g: 0.48, b: 0.34 },
+  soil:      { r: 0.56, g: 0.50, b: 0.40 },
+  sand:      { r: 0.82, g: 0.73, b: 0.55 },
+  rock:      { r: 0.60, g: 0.58, b: 0.54 },
+  snow:      { r: 0.92, g: 0.93, b: 0.95 },
+};
+
 function roadCenterX(worldZ) {
   return noise2D3(worldZ * 0.003, 0.0) * 40
        + noise2D3(worldZ * 0.007, 10.0) * 15;
@@ -167,60 +180,45 @@ function getHeightPhysics(worldX, worldZ) {
 function getColor(worldX, worldZ, y) {
   const road = roadInfo(worldX, worldZ);
   const w    = getBiomeWeight(worldX, worldZ);
-  const micro = noise2D4(worldX * 0.8, worldZ * 0.8) * 0.04;
+  const micro = noise2D4(worldX * 0.25, worldZ * 0.25) * 0.03;
 
-  if (road.onRoad && road.blend < 0.88) {
-    // Road asphalt
-    const nv = noise2D(worldX * 0.4, worldZ * 0.4) * 0.025;
-    let v = 0.20 + nv + (road.blend > 0.72 ? 0.10 : 0);
+  if (road.onRoad && road.blend < 0.9) {
+    const edgeT = smoothstep(0, ROAD_TOTAL, road.dist);
+    let base = mixColor(PALETTE.roadDark, PALETTE.roadLight, edgeT);
+    base = addNoise(base, micro);
 
-    // Center dividing line: yellow double-line
+    // Center dividing line: subtle warm dash
     const distEW = Math.abs(worldX - roadCenterX(worldZ));
     const distNS = Math.abs(worldZ - roadCenterZ(worldX));
     const centerDist = Math.min(distEW, distNS);
-    if (centerDist < 0.5) {
-      const dashOn = (Math.floor((worldX + worldZ) * 0.15) % 5) < 3;
-      if (dashOn) return { r: 0.95, g: 0.85, b: 0.1 }; // yellow center
+    if (centerDist < 0.55) {
+      const dashOn = (Math.floor((worldX + worldZ) * 0.14) % 6) < 3;
+      if (dashOn) return PALETTE.roadLine;
     }
-    // Edge white dashes
-    if (road.dist > ROAD_WIDTH - 1.5 && road.dist < ROAD_WIDTH + 0.5) {
+
+    // Edge dashes
+    if (road.dist > ROAD_WIDTH - 1.0 && road.dist < ROAD_WIDTH + 0.35) {
       const dashOn2 = (Math.floor((worldX + worldZ) * 0.12) % 4) < 2;
-      if (dashOn2) return { r: 0.92, g: 0.92, b: 0.92 };
+      if (dashOn2) return PALETTE.roadEdge;
     }
-    // Slight warm tint toward center
-    return { r: v + 0.01, g: v, b: v - 0.01 };
+
+    return base;
   }
 
   // Terrain
-  if (w.desert > 0.5) {
-    // Sandy desert tones
-    if (y < 1.0) return { r: 0.82 + micro, g: 0.70 + micro, b: 0.40 };
-    if (y < 5.0) return { r: 0.76, g: 0.62, b: 0.34 };
-    return { r: 0.60, g: 0.48, b: 0.30 };
+  let base;
+  if (w.desert > 0.55) {
+    const toRock = smoothstep(6, 18, y);
+    base = mixColor(PALETTE.sand, PALETTE.rock, toRock);
+  } else {
+    const grass = mixColor(PALETTE.grassLow, PALETTE.grassHigh, smoothstep(0.8, 6, y));
+    base = mixColor(PALETTE.soil, grass, smoothstep(0.2, 1.2, y));
+    base = mixColor(base, PALETTE.rock, smoothstep(8, 18, y));
   }
-  if (y < 0.3) return { r: 0.70 + micro, g: 0.56, b: 0.36 }; // wet dirt
-  if (y < 0.8) {
-    const n = noise2D4(worldX * 0.5, worldZ * 0.5) * 0.06;
-    return { r: 0.55 + n, g: 0.50 + n, b: 0.35 + n }; // light mud/dirt
-  }
-  if (y < 1.8) {
-    const n = noise2D4(worldX * 0.3, worldZ * 0.3) * 0.07;
-    return { r: 0.20 + n, g: 0.50 + n * 1.5, b: 0.12 }; // grass
-  }
-  if (y < 5.0) {
-    const n = noise2D4(worldX * 0.25, worldZ * 0.25) * 0.05;
-    return { r: 0.22 + n + w.mountains * 0.08, g: 0.42 + n, b: 0.18 }; // darker grass
-  }
-  if (y < 12.0) {
-    const strata = Math.sin(y * 1.2) * 0.04;
-    return { r: 0.42 + strata, g: 0.37 + strata, b: 0.28 }; // rock
-  }
-  if (y < 24.0) {
-    const strata = Math.sin(y * 0.9) * 0.03;
-    return { r: 0.52 + strata, g: 0.50 + strata, b: 0.47 }; // grey rock
-  }
-  if (y < 34.0) return { r: 0.82, g: 0.84, b: 0.88 }; // light snow
-  return { r: 0.94, g: 0.96, b: 0.99 };                // deep snow
+
+  base = mixColor(base, PALETTE.snow, smoothstep(22, 32, y));
+  base = addNoise(base, micro * 0.8);
+  return base;
 }
 
 // ── Main chunk generation ─────────────────────────────────────────────────────
@@ -396,6 +394,18 @@ function generateObjects(cx, cz) {
   }
 
   return objects;
+}
+
+function mixColor(a, b, t) {
+  return {
+    r: lerp(a.r, b.r, t),
+    g: lerp(a.g, b.g, t),
+    b: lerp(a.b, b.b, t),
+  };
+}
+
+function addNoise(c, n) {
+  return { r: c.r + n, g: c.g + n, b: c.b + n };
 }
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
