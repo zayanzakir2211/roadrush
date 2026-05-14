@@ -205,7 +205,7 @@ function stepPhysics() {
   const angVel     = vehicleBody.angvel();
   const yawRate    = angVel.y;
   const maxYawRate = 1.2 * Math.max(0.15, 1 - absSpeed / (MAX_SPEED_MS * 2));
-  const targetYaw  = inputSteer * maxYawRate;
+  const targetYaw  = -inputSteer * maxYawRate;
   const yawError   = targetYaw - yawRate;
   if (kmh > 1.5) {
     vehicleBody.addTorque({ x: 0, y: yawError * 900, z: 0 }, true);
