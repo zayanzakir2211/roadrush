@@ -40,6 +40,66 @@ function hideLoadingScreen() {
   }
 }
 
+function ensureVehicleLoadingStyles() {
+  if (document.getElementById('vehicle-loading-css')) return;
+  const style = document.createElement('style');
+  style.id = 'vehicle-loading-css';
+  style.textContent = `
+    #vehicle-loading {
+      position: fixed; inset: 0;
+      display: none;
+      align-items: center; justify-content: center;
+      background: rgba(10,10,15,0.75);
+      z-index: 900;
+      backdrop-filter: blur(4px);
+    }
+    #vehicle-loading .box {
+      display: flex; align-items: center; gap: 12px;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 14px 18px;
+      border-radius: 12px;
+      color: #fff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 0.9rem;
+      letter-spacing: 0.4px;
+    }
+    #vehicle-loading .spinner {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.2);
+      border-top-color: #ff6b35;
+      animation: vehicleSpin 0.9s linear infinite;
+    }
+    @keyframes vehicleSpin { to { transform: rotate(360deg); } }
+  `;
+  document.head.appendChild(style);
+}
+
+function showVehicleLoading(status = 'Loading car model...') {
+  ensureVehicleLoadingStyles();
+  let el = document.getElementById('vehicle-loading');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'vehicle-loading';
+    el.innerHTML = `
+      <div class="box">
+        <div class="spinner"></div>
+        <div id="vehicle-loading-text"></div>
+      </div>
+    `;
+    document.body.appendChild(el);
+  }
+  const txt = el.querySelector('#vehicle-loading-text');
+  if (txt) txt.textContent = status;
+  el.style.display = 'flex';
+}
+
+function hideVehicleLoading() {
+  const el = document.getElementById('vehicle-loading');
+  if (el) el.style.display = 'none';
+}
+
 // ── Game state ──────────────────────────────────────────────────────────────
 
 const gameState = {
@@ -63,7 +123,7 @@ let physicsStateRaw = null;
 // Buffer of recent physics states for render interpolation
 const physicsBuffer = [];
 const PHYSICS_BUFFER_SIZE = 8;
-const PHYSICS_INTERP_DELAY = 35; // ms
+const PHYSICS_INTERP_DELAY = 20; // ms
 const _interpQuat0 = new THREE.Quaternion();
 const _interpQuat1 = new THREE.Quaternion();
 const _interpQuatOut = new THREE.Quaternion();
@@ -157,8 +217,13 @@ async function startGame({ seed, vehicleType, playerName }) {
   worldManager.init(seed);
 
   // Create local vehicle
+  showVehicleLoading('Loading car model...');
   localVehicle = new LocalVehicle(scene, vehicleType, physicsWorker);
-  await localVehicle.load();
+  try {
+    await localVehicle.load();
+  } finally {
+    hideVehicleLoading();
+  }
 
   // Connect to backend WebSocket
   const workerUrl = import.meta.env.VITE_WORKER_URL || 'https://roadrush.zayanzakir.workers.dev';
@@ -208,7 +273,8 @@ function onPhysicsMessage(e) {
 // ── Physics interpolation ───────────────────────────────────────────────────
 
 function pushPhysicsSample(state) {
-  physicsBuffer.push({ ts: performance.now(), state });
+  const ts = typeof state.ts === 'number' ? state.ts : Date.now();
+  physicsBuffer.push({ ts, state });
   if (physicsBuffer.length > PHYSICS_BUFFER_SIZE) {
     physicsBuffer.shift();
   }
@@ -289,9 +355,10 @@ function gameLoop(timestamp) {
   if (!gameState.running) return;
 
   const delta = Math.min(clock.getDelta(), 0.1); // cap delta at 100ms
+  const nowMs = Date.now();
 
   // Apply physics state to local vehicle
-  const renderState = getInterpolatedPhysicsState(timestamp);
+  const renderState = getInterpolatedPhysicsState(nowMs);
   if (renderState && localVehicle) {
     localVehicle.applyPhysicsState(renderState);
   }
@@ -306,14 +373,14 @@ function gameLoop(timestamp) {
     localVehicle.update(delta);
 
     // Send state to server at 20Hz
-    if (timestamp - lastNetworkSend >= NETWORK_SEND_INTERVAL) {
+    if (nowMs - lastNetworkSend >= NETWORK_SEND_INTERVAL) {
       if (networkManager && networkManager.connected) {
         const netState = physicsStateRaw
           ? buildNetworkStateFromPhysics(physicsStateRaw, gameState.vehicleType)
           : localVehicle.getNetworkState();
         networkManager.sendState(netState);
       }
-      lastNetworkSend = timestamp;
+      lastNetworkSend = nowMs;
     }
   }
 

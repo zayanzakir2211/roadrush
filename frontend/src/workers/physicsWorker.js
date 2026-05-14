@@ -278,10 +278,9 @@ function stepPhysics() {
     vehicleBody.setLinvel({ x: vel.x * s, y: vel.y, z: vel.z * s }, true);
   }
 
-  // ── Anti-sink: keep car above terrain floor ───────────────────────────────
-  // Simple check: if car drops below y=0 (terrain safety), push it up
-  if (pos.y < 0.3) {
-    vehicleBody.setTranslation({ x: pos.x, y: 1.0, z: pos.z }, true);
+  // ── Safety: recover only if we fall far below terrain ────────────────────
+  if (pos.y < -5) {
+    vehicleBody.setTranslation({ x: pos.x, y: 2.0, z: pos.z }, true);
     const cv = vehicleBody.linvel();
     if (cv.y < 0) vehicleBody.setLinvel({ x: cv.x, y: 0, z: cv.z }, true);
   }
@@ -292,8 +291,10 @@ function stepPhysics() {
   const rotOut = vehicleBody.rotation();
   const velOut = vehicleBody.linvel();
 
+  const now = Date.now();
   self.postMessage({
     type: "state",
+    ts: now,
     px: posOut.x, py: posOut.y, pz: posOut.z,
     rx: rotOut.x, ry: rotOut.y, rz: rotOut.z, rw: rotOut.w,
     velocity: Math.sqrt(velOut.x * velOut.x + velOut.z * velOut.z),
@@ -343,8 +344,10 @@ function stepFallback() {
   const cosH = Math.cos(fb.yaw / 2);
   const q    = { x: 0, y: sinH, z: 0, w: cosH };
 
+  const now = Date.now();
   self.postMessage({
     type: "state",
+    ts: now,
     px: fb.x, py: fb.y, pz: fb.z,
     rx: 0, ry: sinH, rz: 0, rw: cosH,
     velocity: Math.sqrt(fb.vx * fb.vx + fb.vz * fb.vz),

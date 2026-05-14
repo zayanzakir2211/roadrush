@@ -12,7 +12,7 @@
 import { createNoise2D } from 'simplex-noise';
 
 const CHUNK_SIZE   = 64;
-const SUBDIVISIONS = 96;          // ↑ from 48: much smoother/denser terrain
+const SUBDIVISIONS = 64;          // denser terrain without heavy CPU/GPU cost
 const CELL_SIZE    = CHUNK_SIZE / SUBDIVISIONS;
 const PHYSICS_SUBDIVISIONS = 24;  // lower-res mesh for physics colliders
 const PHYSICS_CELL_SIZE    = CHUNK_SIZE / PHYSICS_SUBDIVISIONS;
@@ -132,8 +132,30 @@ function getTerrainHeight(worldX, worldZ) {
   return hPlains * w.plains + hHills * w.hills + hMountains * w.mountains + hDesert * w.desert + micro;
 }
 
+function getTerrainHeightPhysics(worldX, worldZ) {
+  const w = getBiomeWeight(worldX, worldZ);
+
+  const hPlains    = fbm(worldX, worldZ, 4, 0.45, 2.0, 0.006) * 3  + 0.2;
+  const hHills     = fbm(worldX, worldZ, 5, 0.55, 2.1, 0.010) * 16 + 1.0;
+  const hMountains = fbm(worldX, worldZ, 6, 0.62, 2.2, 0.015) * 48 + 5.0;
+  const hDesert    = fbm(worldX, worldZ, 3, 0.40, 2.0, 0.008) * 4  + 0.1;
+
+  // Damp micro detail for smoother physics surface
+  const micro = fbmDetail(worldX, worldZ, 3, 0.5, 2.0, 0.04) * 0.1;
+
+  return hPlains * w.plains + hHills * w.hills + hMountains * w.mountains + hDesert * w.desert + micro;
+}
+
 function getHeight(worldX, worldZ) {
   const terrain = getTerrainHeight(worldX, worldZ);
+  const road    = roadInfo(worldX, worldZ);
+  if (!road.onRoad) return terrain;
+  const roadSurface = 0.05;
+  return lerp(roadSurface, terrain, road.blend * road.blend);
+}
+
+function getHeightPhysics(worldX, worldZ) {
+  const terrain = getTerrainHeightPhysics(worldX, worldZ);
   const road    = roadInfo(worldX, worldZ);
   if (!road.onRoad) return terrain;
   const roadSurface = 0.05;
@@ -272,7 +294,7 @@ function generatePhysicsMesh(cx, cz) {
       const localZ = row * PHYSICS_CELL_SIZE;
       const worldX = cx * CHUNK_SIZE + localX;
       const worldZ = cz * CHUNK_SIZE + localZ;
-      const y      = getHeight(worldX, worldZ);
+      const y      = getHeightPhysics(worldX, worldZ);
 
       vertices[vi++] = localX;
       vertices[vi++] = y;
@@ -301,7 +323,7 @@ function generatePhysicsMesh(cx, cz) {
 function generateObjects(cx, cz) {
   const chunkRng = Alea(`${gameSeed}-obj-${cx}-${cz}`);
   const objects  = [];
-  const attempts = 32; // ↑ from 18: more objects
+  const attempts = 24; // lower object count for smoother frame pacing
 
   for (let i = 0; i < attempts; i++) {
     const localX = chunkRng() * CHUNK_SIZE;
