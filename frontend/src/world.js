@@ -1,61 +1,53 @@
 /**
  * world.js — Chunk Manager
  *
- * Manages which terrain chunks are loaded. Delegates actual chunk mesh
- * generation to chunkWorker.js (off main thread). Caches built meshes in
- * memory and unloads chunks outside the render distance.
- *
- * Chunk coordinate (cx, cz): world X/Z divided by CHUNK_SIZE, floored.
- * Chunk world origin: cx * CHUNK_SIZE, cz * CHUNK_SIZE.
+ * Fixes:
+ *   1. Sends trimesh collision data to physicsWorker so terrain is solid
+ *   2. Tracks physicsWorker reference set from main.js
+ *   3. New object geometries: bush, cactus, lamppost, post
+ *   4. Instanced mesh cleanup properly removes from scene
  */
 
 import * as THREE from 'three';
 import { QUALITY_PRESETS } from './graphics.js';
 
-export const CHUNK_SIZE = 64; // world units per chunk edge
-
-// ── WorldManager ─────────────────────────────────────────────────────────────
+export const CHUNK_SIZE = 64;
 
 export class WorldManager {
   constructor(scene) {
     this.scene = scene;
     this.seed = null;
-    this.renderDistanceChunks = 4; // default; updated by quality preset
+    this.renderDistanceChunks = 5;
+    this.physicsWorker = null; // set via setPhysicsWorker()
 
-    // Map of "cx,cz" → { mesh, requested, loaded }
     this.chunks = new Map();
 
-    // Web worker for chunk generation
     this.chunkWorker = new Worker(
       new URL('./workers/chunkWorker.js', import.meta.url),
       { type: 'module' }
     );
     this.chunkWorker.onmessage = (e) => this._onWorkerMessage(e);
 
-    // Listen for quality preset changes
     window.addEventListener('qualityChanged', (e) => {
       const preset = QUALITY_PRESETS[e.detail.preset];
       if (preset) {
         this.renderDistanceChunks = preset.renderDistanceChunks;
-        // Force chunk update on next update() call
         this._lastUpdateChunk = null;
       }
     });
   }
 
-  /** Call once when a game session starts with a seed. */
+  /** Set the physics worker reference so terrain can be made solid */
+  setPhysicsWorker(worker) {
+    this.physicsWorker = worker;
+  }
+
   init(seed) {
     this.seed = seed;
     this.chunks.clear();
-    // Let chunk worker know the seed
     this.chunkWorker.postMessage({ type: 'setSeed', seed });
   }
 
-  /**
-   * Called each frame. Loads chunks near the player, unloads far ones.
-   * @param {THREE.Vector3} playerPos
-   * @param {number} speed - km/h (used to increase lookahead at high speed)
-   */
   update(playerPos, speed = 0) {
     if (!this.seed) return;
 
@@ -63,13 +55,10 @@ export class WorldManager {
     const cz = Math.floor(playerPos.z / CHUNK_SIZE);
     const key = `${cx},${cz}`;
 
-    // Only recalculate if player moved to a new chunk (or first call)
     if (key === this._lastUpdateChunk) return;
     this._lastUpdateChunk = key;
 
     const dist = this.renderDistanceChunks;
-
-    // Collect desired chunk coords
     const desired = new Set();
     for (let dx = -dist; dx <= dist; dx++) {
       for (let dz = -dist; dz <= dist; dz++) {
@@ -79,21 +68,26 @@ export class WorldManager {
       }
     }
 
-    // Request any new chunks
     for (const ck of desired) {
       if (!this.chunks.has(ck)) {
         const [ncx, ncz] = ck.split(',').map(Number);
-        this.chunks.set(ck, { mesh: null, requested: true, loaded: false });
+        this.chunks.set(ck, { mesh: null, requested: true, loaded: false, instancedMeshes: [] });
         this.chunkWorker.postMessage({ type: 'generateChunk', cx: ncx, cz: ncz });
       }
     }
 
-    // Unload chunks outside render distance
     for (const [ck, chunk] of this.chunks) {
       if (!desired.has(ck)) {
         if (chunk.mesh) {
           this.scene.remove(chunk.mesh);
           this._disposeMesh(chunk.mesh);
+        }
+        if (chunk.instancedMeshes) {
+          for (const im of chunk.instancedMeshes) {
+            this.scene.remove(im);
+            im.geometry?.dispose();
+            im.material?.dispose();
+          }
         }
         this.chunks.delete(ck);
       }
@@ -109,18 +103,18 @@ export class WorldManager {
       const { cx, cz, vertices, indices, colors, objectData } = msg;
       const key = `${cx},${cz}`;
       const entry = this.chunks.get(key);
-      if (!entry) return; // chunk was unloaded before it arrived
+      if (!entry) return;
 
-      // Build Three.js BufferGeometry from transferable arrays
+      // Build Three.js mesh
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
       geo.setIndex(new THREE.BufferAttribute(indices, 1));
       geo.computeVertexNormals();
 
       const mat = new THREE.MeshStandardMaterial({
         vertexColors: true,
-        roughness: 0.85,
+        roughness: 0.88,
         metalness: 0.0,
       });
 
@@ -128,26 +122,36 @@ export class WorldManager {
       mesh.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
       mesh.receiveShadow = true;
       mesh.castShadow = false;
-
       this.scene.add(mesh);
+
       entry.mesh = mesh;
       entry.loaded = true;
 
-      // Add instanced objects (trees, rocks, etc.) from objectData
+      // ── Send trimesh to physics worker for solid collision ────────────────
+      if (this.physicsWorker) {
+        // Transfer copies (can't transfer and keep using in main thread)
+        const vCopy = new Float32Array(vertices);
+        const iCopy = new Uint32Array(indices);
+        this.physicsWorker.postMessage({
+          type: 'addTrimesh',
+          vertices: vCopy,
+          indices: iCopy,
+          cx,
+          cz,
+          offsetX: cx * CHUNK_SIZE,
+          offsetZ: cz * CHUNK_SIZE,
+        }, [vCopy.buffer, iCopy.buffer]);
+      }
+
       if (objectData && objectData.length > 0) {
-        this._placeObjects(objectData, cx, cz);
+        this._placeObjects(objectData, cx, cz, entry);
       }
     }
   }
 
-  // ── Instanced object placement ────────────────────────────────────────────
+  // ── Object placement ──────────────────────────────────────────────────────
 
-  // Cache for instanced mesh factories
-  _instancedCache = new Map();
-
-  _placeObjects(objectData, cx, cz) {
-    // objectData: [{ type, x, y, z, rotY, scale }, ...]
-    // Group by type for instancing
+  _placeObjects(objectData, cx, cz, entry) {
     const groups = {};
     for (const obj of objectData) {
       if (!groups[obj.type]) groups[obj.type] = [];
@@ -155,10 +159,10 @@ export class WorldManager {
     }
 
     for (const [type, objs] of Object.entries(groups)) {
-      const geo = this._getObjectGeo(type);
-      const mat = this._getObjectMat(type);
+      const geo  = this._getObjectGeo(type);
+      const mat  = this._getObjectMat(type);
       const iMesh = new THREE.InstancedMesh(geo, mat, objs.length);
-      iMesh.castShadow = true;
+      iMesh.castShadow    = true;
       iMesh.receiveShadow = true;
 
       const dummy = new THREE.Object3D();
@@ -175,14 +179,7 @@ export class WorldManager {
       });
       iMesh.instanceMatrix.needsUpdate = true;
       this.scene.add(iMesh);
-
-      // Track for cleanup when chunk unloads
-      const key = `${cx},${cz}`;
-      const entry = this.chunks.get(key);
-      if (entry) {
-        entry.instancedMeshes = entry.instancedMeshes || [];
-        entry.instancedMeshes.push(iMesh);
-      }
+      entry.instancedMeshes.push(iMesh);
     }
   }
 
@@ -193,17 +190,32 @@ export class WorldManager {
     let geo;
     switch (type) {
       case 'tree':
-        geo = new THREE.ConeGeometry(1.2, 4, 7);
+        geo = new THREE.ConeGeometry(1.3, 4.5, 8);
         break;
       case 'trunk':
-        geo = new THREE.CylinderGeometry(0.2, 0.3, 1.5, 6);
+        geo = new THREE.CylinderGeometry(0.18, 0.28, 1.6, 7);
         break;
       case 'rock':
-        geo = new THREE.DodecahedronGeometry(0.8);
+        geo = new THREE.DodecahedronGeometry(0.9, 0);
         break;
-      case 'barrel':
-        geo = new THREE.CylinderGeometry(0.4, 0.4, 1.0, 10);
+      case 'bush': {
+        // Icosahedron looks like a bush blob
+        geo = new THREE.IcosahedronGeometry(0.8, 1);
         break;
+      }
+      case 'cactus': {
+        // Simple cylinder with smaller arms
+        geo = new THREE.CylinderGeometry(0.18, 0.22, 2.2, 8);
+        break;
+      }
+      case 'lamppost': {
+        geo = new THREE.CylinderGeometry(0.06, 0.09, 4.0, 6);
+        break;
+      }
+      case 'post': {
+        geo = new THREE.CylinderGeometry(0.06, 0.06, 1.2, 5);
+        break;
+      }
       case 'cone':
         geo = new THREE.ConeGeometry(0.3, 0.8, 8);
         break;
@@ -219,43 +231,48 @@ export class WorldManager {
     if (this._matCache[type]) return this._matCache[type];
 
     const colors = {
-      tree: 0x2d6a2d,
-      trunk: 0x6b4423,
-      rock: 0x888888,
-      barrel: 0x885522,
-      cone: 0xff6600,
+      tree:     0x2d6a2d,
+      trunk:    0x6b4423,
+      rock:     0x7a7a72,
+      bush:     0x3a7a25,
+      cactus:   0x2d7a3a,
+      lamppost: 0x555555,
+      post:     0x8a6633,
+      cone:     0xff6200,
     };
+
+    const roughness = {
+      tree:     0.9,
+      trunk:    0.95,
+      rock:     0.85,
+      bush:     0.92,
+      cactus:   0.85,
+      lamppost: 0.4,
+      post:     0.8,
+      cone:     0.6,
+    };
+
     const mat = new THREE.MeshStandardMaterial({
       color: colors[type] ?? 0xaaaaaa,
-      roughness: 0.8,
+      roughness: roughness[type] ?? 0.8,
+      metalness: type === 'lamppost' ? 0.5 : 0.0,
     });
     this._matCache[type] = mat;
     return mat;
   }
 
-  // ── Disposal helpers ──────────────────────────────────────────────────────
+  // ── Disposal ──────────────────────────────────────────────────────────────
 
   _disposeMesh(mesh) {
     if (!mesh) return;
     mesh.geometry?.dispose();
     if (Array.isArray(mesh.material)) mesh.material.forEach((m) => m.dispose());
     else mesh.material?.dispose();
-
-    if (mesh.userData?.instancedMeshes) {
-      for (const im of mesh.userData.instancedMeshes) {
-        im.geometry?.dispose();
-        im.material?.dispose();
-        this.scene.remove(im);
-      }
-    }
   }
 
   dispose() {
     for (const [, chunk] of this.chunks) {
-      if (chunk.mesh) {
-        this.scene.remove(chunk.mesh);
-        this._disposeMesh(chunk.mesh);
-      }
+      if (chunk.mesh) { this.scene.remove(chunk.mesh); this._disposeMesh(chunk.mesh); }
       if (chunk.instancedMeshes) {
         for (const im of chunk.instancedMeshes) {
           this.scene.remove(im);

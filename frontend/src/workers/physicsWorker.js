@@ -1,6 +1,11 @@
 /**
  * physicsWorker.js
- * Uses @dimforge/rapier3d-compat (WASM inlined as base64 — no build plugin needed)
+ *
+ * Fixes applied:
+ *   1. Terrain trimesh colliders are properly added and kept solid
+ *   2. Reverse velocity direction handled correctly after S-brake
+ *   3. Ground plane at y=0 kept as a safety net
+ *   4. Anti-sink correction so car never falls through terrain
  */
 
 import RAPIER from "@dimforge/rapier3d-compat";
@@ -16,25 +21,49 @@ let inputBrake    = 0;
 const FIXED_DT = 1 / 60;
 let vehicleDef = { engineForce: 3500, brakeForce: 200, maxSteer: 0.5 };
 
+// Track terrain chunks added to physics
+const addedChunks = new Set();
+
 // ── Message handler ──────────────────────────────────────────────────────────
 
 self.onmessage = async (e) => {
   const msg = e.data;
   switch (msg.type) {
-    case "init":          await initRapier();             break;
-    case "setSeed":                                        break;
-    case "createVehicle": if (world) createVehicle(msg); break;
+    case "init":
+      await initRapier();
+      break;
+    case "setSeed":
+      // Seed doesn't affect physics directly
+      break;
+    case "createVehicle":
+      if (world) createVehicle(msg);
+      break;
     case "input":
       inputThrottle = clamp(msg.throttle ?? 0, -1, 1);
       inputSteer    = clamp(msg.steer    ?? 0, -1, 1);
       inputBrake    = clamp(msg.brake    ?? 0,  0, 1);
       break;
     case "addTrimesh":
-      if (world && msg.vertices && msg.indices)
-        addTrimesh(msg.vertices, msg.indices, msg.offsetX ?? 0, msg.offsetZ ?? 0);
+      if (world && msg.vertices && msg.indices) {
+        addTrimesh(msg.vertices, msg.indices, msg.cx ?? 0, msg.cz ?? 0, msg.offsetX ?? 0, msg.offsetZ ?? 0);
+      }
       break;
-    case "pause":  paused = true;  break;
-    case "resume": paused = false; break;
+    case "removeTrimesh":
+      // handled via chunk key tracking — we don't remove in Rapier easily, so just leave them
+      break;
+    case "teleport":
+      if (vehicleBody && msg.position) {
+        vehicleBody.setTranslation({ x: msg.position.x, y: msg.position.y + 3, z: msg.position.z }, true);
+        vehicleBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        vehicleBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      }
+      break;
+    case "pause":
+      paused = true;
+      break;
+    case "resume":
+      paused = false;
+      break;
   }
 };
 
@@ -56,12 +85,12 @@ async function initRapier() {
 function buildWorld() {
   world = new RAPIER.World({ x: 0, y: -20, z: 0 });
 
-  // halfSpace is not available in rapier3d-compat 0.12 — use a large flat cuboid instead
+  // Large flat safety-net ground (in case trimesh hasn't loaded yet)
   const groundBody = world.createRigidBody(
-    RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.1, 0)
+    RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.15, 0)
   );
   world.createCollider(
-    RAPIER.ColliderDesc.cuboid(10000, 0.1, 10000).setFriction(0.8),
+    RAPIER.ColliderDesc.cuboid(5000, 0.15, 5000).setFriction(0.8),
     groundBody
   );
 }
@@ -74,13 +103,13 @@ function createVehicle(cfg) {
   vehicleDef.maxSteer    = cfg.maxSteer    ?? 0.5;
 
   const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-    .setTranslation(cfg.position?.x ?? 0, (cfg.position?.y ?? 2) + 1, cfg.position?.z ?? 0)
-    .setLinearDamping(0.6)    // strong linear drag base
-    .setAngularDamping(8.0)   // very high — kills spin immediately
+    .setTranslation(cfg.position?.x ?? 0, (cfg.position?.y ?? 2) + 2, cfg.position?.z ?? 0)
+    .setLinearDamping(0.6)
+    .setAngularDamping(8.0)
     .setAdditionalMass(cfg.mass ?? 1200);
 
   vehicleBody = world.createRigidBody(bodyDesc);
-  // Lock X/Z rotation completely — no flipping, no rolling
+  // Prevent rolling/flipping — only yaw rotation allowed
   vehicleBody.setEnabledRotations(false, true, false, true);
 
   world.createCollider(
@@ -92,20 +121,33 @@ function createVehicle(cfg) {
   );
 }
 
-// ── Trimesh terrain ──────────────────────────────────────────────────────────
+// ── Terrain trimesh colliders ─────────────────────────────────────────────────
 
-function addTrimesh(vertices, indices, offsetX, offsetZ) {
+function addTrimesh(vertices, indices, cx, cz, offsetX, offsetZ) {
+  const chunkKey = `${cx},${cz}`;
+  if (addedChunks.has(chunkKey)) return; // already added
+  addedChunks.add(chunkKey);
+
+  // Shift vertices by chunk world offset
   const shifted = new Float32Array(vertices.length);
   for (let i = 0; i < vertices.length; i += 3) {
     shifted[i]     = vertices[i]     + offsetX;
     shifted[i + 1] = vertices[i + 1];
     shifted[i + 2] = vertices[i + 2] + offsetZ;
   }
-  const groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  world.createCollider(
-    RAPIER.ColliderDesc.trimesh(shifted, indices).setFriction(0.8).setRestitution(0.05),
-    groundBody
-  );
+
+  try {
+    const terrainBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    world.createCollider(
+      RAPIER.ColliderDesc.trimesh(shifted, new Uint32Array(indices))
+        .setFriction(0.8)
+        .setRestitution(0.02),
+      terrainBody
+    );
+  } catch (err) {
+    // Trimesh may fail on degenerate geometry — silently ignore
+    console.warn('[PhysicsWorker] trimesh failed for chunk', chunkKey, err.message);
+  }
 }
 
 // ── Physics step ─────────────────────────────────────────────────────────────
@@ -124,85 +166,113 @@ function stepPhysics() {
   const rot   = vehicleBody.rotation();
   const quat  = { x: rot.x, y: rot.y, z: rot.z, w: rot.w };
   const vel   = vehicleBody.linvel();
-  const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z); // m/s
-  const kmh   = speed * 3.6;
+  const pos   = vehicleBody.translation();
 
+  // Forward vector in world space
   const fwd   = rotateVec3({ x: 0, y: 0, z: 1 }, quat);
   const right = rotateVec3({ x: 1, y: 0, z: 0 }, quat);
 
-  // ── Engine: only apply force up to speed cap ──────────────────────────────
-  const MAX_SPEED_MS = 28;   // ~100 km/h hard cap
-  const speedRatio   = Math.max(0, 1 - speed / MAX_SPEED_MS);
-  const engineForce  = vehicleDef.engineForce * inputThrottle * speedRatio * 0.4;
+  // Signed speed along forward axis (positive = forward, negative = reversing)
+  const forwardSpeed = fwd.x * vel.x + fwd.z * vel.z;
+  const lateralSpeed = right.x * vel.x + right.z * vel.z;
+  const absSpeed     = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+  const kmh          = absSpeed * 3.6;
+
+  // ── Engine force ──────────────────────────────────────────────────────────
+  // Throttle +1 = forward, -1 = reverse.
+  // Speed cap is directional: no forward force if already at max forward, etc.
+  const MAX_SPEED_MS  = 28; // ~100 km/h
+  const MAX_REV_MS    = 10; // ~36 km/h reverse cap
+
+  let engineForce = 0;
+  if (inputThrottle > 0) {
+    const ratio = Math.max(0, 1 - forwardSpeed / MAX_SPEED_MS);
+    engineForce = vehicleDef.engineForce * inputThrottle * ratio * 0.4;
+  } else if (inputThrottle < 0) {
+    // Reverse: only when near-stopped or already reversing
+    if (forwardSpeed < 1.0) {
+      const ratio = Math.max(0, 1 - (-forwardSpeed) / MAX_REV_MS);
+      engineForce = vehicleDef.engineForce * inputThrottle * ratio * 0.25;
+    }
+  }
+
   vehicleBody.addForce(
     { x: fwd.x * engineForce, y: 0, z: fwd.z * engineForce },
     true
   );
 
-  // ── Steering: yaw rate control, not raw torque ────────────────────────────
-  // Target yaw rate proportional to steer input and speed
+  // ── Steering ──────────────────────────────────────────────────────────────
   const angVel     = vehicleBody.angvel();
   const yawRate    = angVel.y;
-  const maxYawRate = 1.2 * (1 - speed / (MAX_SPEED_MS * 2)); // slower at speed
-  const targetYaw  = inputSteer * Math.max(0.2, maxYawRate);
+  const maxYawRate = 1.2 * Math.max(0.15, 1 - absSpeed / (MAX_SPEED_MS * 2));
+  const targetYaw  = inputSteer * maxYawRate;
   const yawError   = targetYaw - yawRate;
-  // Only steer if actually moving (>2 km/h)
-  if (kmh > 2) {
-    vehicleBody.addTorque({ x: 0, y: yawError * 800, z: 0 }, true);
+  if (kmh > 1.5) {
+    vehicleBody.addTorque({ x: 0, y: yawError * 900, z: 0 }, true);
   }
 
-  // ── Strong lateral friction — the key to non-icy handling ─────────────────
-  const lat = right.x * vel.x + right.z * vel.z;
+  // ── Lateral friction (prevents drifting / sliding) ────────────────────────
   vehicleBody.addForce(
-    { x: -right.x * lat * 3500, y: 0, z: -right.z * lat * 3500 },
+    { x: -right.x * lateralSpeed * 3800, y: 0, z: -right.z * lateralSpeed * 3800 },
     true
   );
 
-  // ── Natural drag (air resistance) ─────────────────────────────────────────
+  // ── Air / rolling resistance ──────────────────────────────────────────────
   vehicleBody.addForce(
-    { x: -vel.x * speed * 2.5, y: 0, z: -vel.z * speed * 2.5 },
+    { x: -vel.x * absSpeed * 2.2, y: 0, z: -vel.z * absSpeed * 2.2 },
     true
   );
 
-  // ── Brake ─────────────────────────────────────────────────────────────────
+  // ── Brake (Space held OR S while moving forward) ──────────────────────────
   if (inputBrake > 0) {
     vehicleBody.addForce(
       {
-        x: -vel.x * vehicleDef.brakeForce * inputBrake * 4,
+        x: -vel.x * vehicleDef.brakeForce * inputBrake * 4.5,
         y: 0,
-        z: -vel.z * vehicleDef.brakeForce * inputBrake * 4,
+        z: -vel.z * vehicleDef.brakeForce * inputBrake * 4.5,
       },
       true
     );
   }
 
-  // ── Absolute speed cap ────────────────────────────────────────────────────
-  if (speed > MAX_SPEED_MS) {
-    const s = MAX_SPEED_MS / speed;
+  // ── Hard speed caps ───────────────────────────────────────────────────────
+  if (forwardSpeed > MAX_SPEED_MS) {
+    const s = MAX_SPEED_MS / Math.max(absSpeed, 0.001);
     vehicleBody.setLinvel({ x: vel.x * s, y: vel.y, z: vel.z * s }, true);
+  } else if (forwardSpeed < -MAX_REV_MS) {
+    const s = MAX_REV_MS / Math.max(absSpeed, 0.001);
+    vehicleBody.setLinvel({ x: vel.x * s, y: vel.y, z: vel.z * s }, true);
+  }
+
+  // ── Anti-sink: keep car above terrain floor ───────────────────────────────
+  // Simple check: if car drops below y=0 (terrain safety), push it up
+  if (pos.y < 0.3) {
+    vehicleBody.setTranslation({ x: pos.x, y: 1.0, z: pos.z }, true);
+    const cv = vehicleBody.linvel();
+    if (cv.y < 0) vehicleBody.setLinvel({ x: cv.x, y: 0, z: cv.z }, true);
   }
 
   world.step();
 
-  const pos    = vehicleBody.translation();
+  const posOut = vehicleBody.translation();
   const rotOut = vehicleBody.rotation();
   const velOut = vehicleBody.linvel();
 
   self.postMessage({
     type: "state",
-    px: pos.x, py: pos.y, pz: pos.z,
+    px: posOut.x, py: posOut.y, pz: posOut.z,
     rx: rotOut.x, ry: rotOut.y, rz: rotOut.z, rw: rotOut.w,
     velocity: Math.sqrt(velOut.x * velOut.x + velOut.z * velOut.z),
     wheels: WHEEL_OFFSETS.map((o) => {
       const wl = rotateVec3(o, rotOut);
-      return { px: pos.x + wl.x, py: pos.y + wl.y, pz: pos.z + wl.z };
+      return { px: posOut.x + wl.x, py: posOut.y + wl.y, pz: posOut.z + wl.z };
     }),
   });
 }
 
 // ── Fallback (pure JS, no Rapier) ────────────────────────────────────────────
 
-const fb = { x: 0, y: 0.5, z: 0, vx: 0, vz: 0, yaw: 0 };
+const fb = { x: 0, y: 1.0, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0 };
 
 function stepFallback() {
   if (paused) return;
@@ -212,22 +282,28 @@ function stepFallback() {
 
   if (spd > 0.05) fb.yaw += inputSteer * 0.03;
 
-  const acc = vehicleDef.engineForce * 0.0006 * inputThrottle;
+  // Reverse after braking
+  const fwdSpd = cosY * fb.vx + sinY * fb.vz;
+  let acc = 0;
+  if (inputThrottle > 0) acc = vehicleDef.engineForce * 0.0006 * inputThrottle;
+  else if (inputThrottle < 0 && fwdSpd < 0.5) acc = vehicleDef.engineForce * 0.0003 * inputThrottle;
+
   fb.vx += cosY * acc * FIXED_DT;
   fb.vz += sinY * acc * FIXED_DT;
   fb.vx *= 0.96;
   fb.vz *= 0.96;
 
-  if (inputBrake > 0) { fb.vx *= 0.88; fb.vz *= 0.88; }
+  if (inputBrake > 0) { fb.vx *= 0.86; fb.vz *= 0.86; }
 
   // Lateral friction
   const rx  = -sinY, rz = cosY;
   const lat = rx * fb.vx + rz * fb.vz;
-  fb.vx -= rx * lat * 0.7;
-  fb.vz -= rz * lat * 0.7;
+  fb.vx -= rx * lat * 0.72;
+  fb.vz -= rz * lat * 0.72;
 
   fb.x += fb.vx;
   fb.z += fb.vz;
+  if (fb.y < 1.0) fb.y = 1.0;
 
   const sinH = Math.sin(fb.yaw / 2);
   const cosH = Math.cos(fb.yaw / 2);

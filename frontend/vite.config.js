@@ -6,6 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   root: '.',
+  // Serve both 'public' and 'cars-model' as static assets
   publicDir: 'public',
 
   build: {
@@ -20,14 +21,12 @@ export default defineConfig({
   },
 
   // rapier3d-compat bundles WASM as base64 — no plugin or special handling needed.
-  // Excluding it from pre-bundling avoids Vite trying to transform it.
   optimizeDeps: {
     exclude: ['@dimforge/rapier3d-compat'],
   },
 
   worker: {
     format: 'es',
-    // No plugins needed — compat build is plain JS + inlined WASM
   },
 
   server: {
@@ -36,5 +35,11 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
+    // Serve cars-model GLB files directly
+    fs: {
+      allow: ['..'],
+    },
   },
+
+  assetsInclude: ['**/*.glb'],
 });

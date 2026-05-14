@@ -14,7 +14,7 @@
 
 import * as THREE from 'three';
 import { setupRenderer, setQualityPreset, detectGPUTier } from './graphics.js';
-import { createUI, showMainMenu, hideMainMenu, updateHUD, showSettings } from './ui.js';
+import { createUI, showMainMenu, hideMainMenu, updateHUD, showSettings, setTeleportCallback } from './ui.js';
 import { SeedManager } from './seed.js';
 import { NetworkManager } from './network.js';
 import { LocalVehicle } from './vehicle.js';
@@ -138,6 +138,14 @@ async function startGame({ seed, vehicleType, playerName }) {
 
   hideMainMenu();
 
+  // Wire physics worker into world manager so terrain collision works
+  worldManager.setPhysicsWorker(physicsWorker);
+
+  // Set teleport callback for ui.js minimap teleport
+  setTeleportCallback((targetPosition) => {
+    physicsWorker.postMessage({ type: 'teleport', position: targetPosition });
+  });
+
   // Start world generation with this seed
   worldManager.init(seed);
 
@@ -238,7 +246,7 @@ function gameLoop(timestamp) {
     seed: gameState.seed,
     time: elapsed,
     localPosition: localVehicle ? localVehicle.getPosition() : null,
-    remotePlayers: remotePlayerManager.getPositions(),
+    remotePlayers: remotePlayerManager.getPositions(gameState.playerName),
   });
 
   // Update audio

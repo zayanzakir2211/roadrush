@@ -1,22 +1,24 @@
 /**
  * chunkWorker.js — Terrain Chunk Generation (Web Worker)
  *
- * Complete rewrite:
- * - Continuous road network using global noise-based spline (no chunk seams)
- * - Smooth multi-biome terrain (plains, hills, mountains) blended by distance
- * - Proper vertex colors: road asphalt, grass, dirt, rock, snow
- * - Deterministic object placement per chunk
+ * Improvements:
+ *   - SUBDIVISIONS raised to 96 for much denser, smoother terrain (slowroads-style)
+ *   - More object types: bushes, fence posts, lamp posts, road markings
+ *   - Richer biome blending and height variation
+ *   - Road has center line + edge markings
+ *   - Grass blade variation, rock strata color
  */
 
 import { createNoise2D } from 'simplex-noise';
 
-const CHUNK_SIZE  = 64;
-const SUBDIVISIONS = 48;          // higher = smoother terrain
-const CELL_SIZE   = CHUNK_SIZE / SUBDIVISIONS;
+const CHUNK_SIZE   = 64;
+const SUBDIVISIONS = 96;          // ↑ from 48: much smoother/denser terrain
+const CELL_SIZE    = CHUNK_SIZE / SUBDIVISIONS;
 
-let noise2D  = null;   // fine detail
+let noise2D  = null;   // fine detail / terrain
 let noise2D2 = null;   // coarse biome
 let noise2D3 = null;   // road network
+let noise2D4 = null;   // micro detail / color variation
 let gameSeed = '0';
 
 // ── Message handler ───────────────────────────────────────────────────────────
@@ -28,16 +30,18 @@ self.onmessage = (e) => {
     const rng1 = Alea(gameSeed + '_terrain');
     const rng2 = Alea(gameSeed + '_biome');
     const rng3 = Alea(gameSeed + '_road');
+    const rng4 = Alea(gameSeed + '_micro');
     noise2D  = createNoise2D(rng1);
     noise2D2 = createNoise2D(rng2);
     noise2D3 = createNoise2D(rng3);
+    noise2D4 = createNoise2D(rng4);
   }
   if (msg.type === 'generateChunk') {
     if (!noise2D) {
-      const r = Alea('default');
-      noise2D  = createNoise2D(r);
+      noise2D  = createNoise2D(Alea('default1'));
       noise2D2 = createNoise2D(Alea('default2'));
       noise2D3 = createNoise2D(Alea('default3'));
+      noise2D4 = createNoise2D(Alea('default4'));
     }
     const result = generateChunk(msg.cx, msg.cz);
     self.postMessage(result, [
@@ -61,72 +65,74 @@ function fbm(nx, nz, octaves, persistence, lacunarity, scale) {
   return v / max;
 }
 
-// ── Road network ──────────────────────────────────────────────────────────────
-// Two global roads: one running roughly E-W, one N-S, both gently curving.
-// Road center is a function of world coords only → perfectly continuous.
+function fbmDetail(nx, nz, octaves, persistence, lacunarity, scale) {
+  let v = 0, amp = 1, freq = scale, max = 0;
+  for (let i = 0; i < octaves; i++) {
+    v   += noise2D4(nx * freq, nz * freq) * amp;
+    max += amp;
+    amp  *= persistence;
+    freq *= lacunarity;
+  }
+  return v / max;
+}
 
-const ROAD_WIDTH      = 10;   // half-width of driveable surface
-const ROAD_SHOULDER   = 5;    // extra flat shoulder each side
-const ROAD_TOTAL      = ROAD_WIDTH + ROAD_SHOULDER;
+// ── Road network ──────────────────────────────────────────────────────────────
+
+const ROAD_WIDTH    = 10;   // half-width driveable
+const ROAD_SHOULDER = 4;    // flat shoulder
+const ROAD_TOTAL    = ROAD_WIDTH + ROAD_SHOULDER;
 
 function roadCenterX(worldZ) {
-  // East-West road: center X wanders slowly with Z
   return noise2D3(worldZ * 0.003, 0.0) * 40
        + noise2D3(worldZ * 0.007, 10.0) * 15;
 }
-
 function roadCenterZ(worldX) {
-  // North-South road: center Z wanders slowly with X
   return noise2D3(0.0, worldX * 0.003) * 40
        + noise2D3(10.0, worldX * 0.007) * 15;
 }
 
-/**
- * Returns { onRoad, blend, roadY } for a world point.
- * blend = 0 at road center, 1 at road edge (smooth step)
- */
 function roadInfo(worldX, worldZ) {
   const distEW = Math.abs(worldX - roadCenterX(worldZ));
   const distNS = Math.abs(worldZ - roadCenterZ(worldX));
-  const dist   = Math.min(distEW, distNS);          // take closest road
-
-  if (dist >= ROAD_TOTAL) return { onRoad: false, blend: 1, roadY: 0 };
-
-  const blend = smoothstep(0, ROAD_TOTAL, dist);    // 0=center 1=edge
-  return { onRoad: true, blend, roadY: 0 };
+  const dist   = Math.min(distEW, distNS);
+  if (dist >= ROAD_TOTAL) return { onRoad: false, blend: 1, dist };
+  const blend = smoothstep(0, ROAD_TOTAL, dist);
+  return { onRoad: true, blend, dist };
 }
 
 // ── Biome & height ────────────────────────────────────────────────────────────
 
 function getBiomeWeight(worldX, worldZ) {
-  // Returns { plains, hills, mountains } weights summing to 1
-  const b = noise2D2(worldX * 0.004, worldZ * 0.004);  // -1..1
+  const b  = noise2D2(worldX * 0.004, worldZ * 0.004);
   const b2 = noise2D2(worldX * 0.002 + 50, worldZ * 0.002 + 50);
-  const plains    = smoothstep( 0.0,  0.4, 1 - Math.abs(b));
-  const mountains = smoothstep( 0.3,  0.8, b2);
-  const hills     = Math.max(0, 1 - plains - mountains);
-  const total     = plains + hills + mountains || 1;
-  return { plains: plains/total, hills: hills/total, mountains: mountains/total };
+  const b3 = noise2D2(worldX * 0.003 + 100, worldZ * 0.003 - 100);
+  const plains    = smoothstep(0.0, 0.4, 1 - Math.abs(b));
+  const mountains = smoothstep(0.3, 0.8, b2);
+  const desert    = smoothstep(0.4, 0.9, b3) * (1 - mountains);
+  const hills     = Math.max(0, 1 - plains - mountains - desert);
+  const total     = plains + hills + mountains + desert || 1;
+  return { plains: plains/total, hills: hills/total, mountains: mountains/total, desert: desert/total };
 }
 
 function getTerrainHeight(worldX, worldZ) {
   const w = getBiomeWeight(worldX, worldZ);
 
-  const hPlains    = fbm(worldX, worldZ, 3, 0.45, 2.0, 0.006) * 3 + 0.2;
-  const hHills     = fbm(worldX, worldZ, 4, 0.55, 2.1, 0.010) * 14 + 1.0;
-  const hMountains = fbm(worldX, worldZ, 5, 0.60, 2.2, 0.015) * 40 + 5.0;
+  const hPlains    = fbm(worldX, worldZ, 4, 0.45, 2.0, 0.006) * 3  + 0.2;
+  const hHills     = fbm(worldX, worldZ, 5, 0.55, 2.1, 0.010) * 16 + 1.0;
+  const hMountains = fbm(worldX, worldZ, 6, 0.62, 2.2, 0.015) * 48 + 5.0;
+  const hDesert    = fbm(worldX, worldZ, 3, 0.40, 2.0, 0.008) * 4  + 0.1;
 
-  return hPlains * w.plains + hHills * w.hills + hMountains * w.mountains;
+  // Add micro-detail ripples for richness
+  const micro = fbmDetail(worldX, worldZ, 3, 0.5, 2.0, 0.04) * 0.4;
+
+  return hPlains * w.plains + hHills * w.hills + hMountains * w.mountains + hDesert * w.desert + micro;
 }
 
 function getHeight(worldX, worldZ) {
   const terrain = getTerrainHeight(worldX, worldZ);
   const road    = roadInfo(worldX, worldZ);
-
   if (!road.onRoad) return terrain;
-
-  // Blend road flat surface into terrain using smoothstep
-  const roadSurface = 0.05; // flat road at y≈0
+  const roadSurface = 0.05;
   return lerp(roadSurface, terrain, road.blend * road.blend);
 }
 
@@ -135,31 +141,60 @@ function getHeight(worldX, worldZ) {
 function getColor(worldX, worldZ, y) {
   const road = roadInfo(worldX, worldZ);
   const w    = getBiomeWeight(worldX, worldZ);
+  const micro = noise2D4(worldX * 0.8, worldZ * 0.8) * 0.04;
 
-  if (road.onRoad && road.blend < 0.85) {
-    // Road surface: asphalt with slight noise
-    const n = noise2D(worldX * 0.5, worldZ * 0.5) * 0.03;
-    const v = 0.22 + n + (road.blend > 0.7 ? 0.12 : 0); // lighter shoulder
-    // White dashed line in center
+  if (road.onRoad && road.blend < 0.88) {
+    // Road asphalt
+    const nv = noise2D(worldX * 0.4, worldZ * 0.4) * 0.025;
+    let v = 0.20 + nv + (road.blend > 0.72 ? 0.10 : 0);
+
+    // Center dividing line: yellow double-line
     const distEW = Math.abs(worldX - roadCenterX(worldZ));
     const distNS = Math.abs(worldZ - roadCenterZ(worldX));
-    const onCenter = Math.min(distEW, distNS) < 0.6;
-    const dashOn   = (Math.floor(worldX * 0.1 + worldZ * 0.1) % 4) < 2;
-    if (onCenter && dashOn) return { r: 0.95, g: 0.92, b: 0.5 }; // yellow line
-    return { r: v, g: v, b: v };
+    const centerDist = Math.min(distEW, distNS);
+    if (centerDist < 0.5) {
+      const dashOn = (Math.floor((worldX + worldZ) * 0.15) % 5) < 3;
+      if (dashOn) return { r: 0.95, g: 0.85, b: 0.1 }; // yellow center
+    }
+    // Edge white dashes
+    if (road.dist > ROAD_WIDTH - 1.5 && road.dist < ROAD_WIDTH + 0.5) {
+      const dashOn2 = (Math.floor((worldX + worldZ) * 0.12) % 4) < 2;
+      if (dashOn2) return { r: 0.92, g: 0.92, b: 0.92 };
+    }
+    // Slight warm tint toward center
+    return { r: v + 0.01, g: v, b: v - 0.01 };
   }
 
-  // Terrain color by height + biome blend
-  if (y < 0.4) return { r: 0.72, g: 0.58, b: 0.38 };  // dirt/sand
-  if (y < 1.5) {
-    // grass - slight variation
-    const n = noise2D(worldX * 0.3, worldZ * 0.3) * 0.06;
-    return { r: 0.22 + n, g: 0.52 + n, b: 0.14 };
+  // Terrain
+  if (w.desert > 0.5) {
+    // Sandy desert tones
+    if (y < 1.0) return { r: 0.82 + micro, g: 0.70 + micro, b: 0.40 };
+    if (y < 5.0) return { r: 0.76, g: 0.62, b: 0.34 };
+    return { r: 0.60, g: 0.48, b: 0.30 };
   }
-  if (y < 8)  return { r: 0.28 + w.mountains*0.1, g: 0.44, b: 0.20 }; // mid grass
-  if (y < 18) return { r: 0.45, g: 0.40, b: 0.32 }; // rock
-  if (y < 30) return { r: 0.55, g: 0.52, b: 0.50 }; // grey rock
-  return { r: 0.90, g: 0.92, b: 0.95 };              // snow
+  if (y < 0.3) return { r: 0.70 + micro, g: 0.56, b: 0.36 }; // wet dirt
+  if (y < 0.8) {
+    const n = noise2D4(worldX * 0.5, worldZ * 0.5) * 0.06;
+    return { r: 0.55 + n, g: 0.50 + n, b: 0.35 + n }; // light mud/dirt
+  }
+  if (y < 1.8) {
+    const n = noise2D4(worldX * 0.3, worldZ * 0.3) * 0.07;
+    return { r: 0.20 + n, g: 0.50 + n * 1.5, b: 0.12 }; // grass
+  }
+  if (y < 5.0) {
+    const n = noise2D4(worldX * 0.25, worldZ * 0.25) * 0.05;
+    return { r: 0.22 + n + w.mountains * 0.08, g: 0.42 + n, b: 0.18 }; // darker grass
+  }
+  if (y < 12.0) {
+    const strata = Math.sin(y * 1.2) * 0.04;
+    return { r: 0.42 + strata, g: 0.37 + strata, b: 0.28 }; // rock
+  }
+  if (y < 24.0) {
+    const strata = Math.sin(y * 0.9) * 0.03;
+    return { r: 0.52 + strata, g: 0.50 + strata, b: 0.47 }; // grey rock
+  }
+  if (y < 34.0) return { r: 0.82, g: 0.84, b: 0.88 }; // light snow
+  return { r: 0.94, g: 0.96, b: 0.99 };                // deep snow
 }
 
 // ── Main chunk generation ─────────────────────────────────────────────────────
@@ -191,7 +226,6 @@ function generateChunk(cx, cz) {
     }
   }
 
-  // Index buffer
   const indices = new Uint32Array(SUBDIVISIONS * SUBDIVISIONS * 6);
   let ii = 0;
   for (let row = 0; row < SUBDIVISIONS; row++) {
@@ -214,7 +248,7 @@ function generateChunk(cx, cz) {
 function generateObjects(cx, cz) {
   const chunkRng = Alea(`${gameSeed}-obj-${cx}-${cz}`);
   const objects  = [];
-  const attempts = 18;
+  const attempts = 32; // ↑ from 18: more objects
 
   for (let i = 0; i < attempts; i++) {
     const localX = chunkRng() * CHUNK_SIZE;
@@ -223,30 +257,66 @@ function generateObjects(cx, cz) {
     const worldZ = cz * CHUNK_SIZE + localZ;
     const road   = roadInfo(worldX, worldZ);
 
-    // Don't place anything on the driveable road surface
-    if (road.onRoad && road.blend < 0.9) {
-      // Place road cones/barriers only on shoulder edges
-      if (road.blend > 0.7 && chunkRng() > 0.75) {
-        const y = getHeight(worldX, worldZ);
-        objects.push({ type: 'cone', x: localX, y, z: localZ, rotY: chunkRng() * Math.PI * 2, scale: 0.9 });
+    if (road.onRoad && road.blend < 0.92) {
+      // Road-side: lamp posts, cones, guardrail posts
+      if (road.dist > ROAD_WIDTH + 0.5 && road.dist < ROAD_TOTAL - 0.5) {
+        if (chunkRng() > 0.65) {
+          const y = getHeight(worldX, worldZ);
+          const type = chunkRng() > 0.6 ? 'lamppost' : 'cone';
+          objects.push({ type, x: localX, y, z: localZ, rotY: 0, scale: 1.0 });
+        }
       }
       continue;
     }
 
     const y = getHeight(worldX, worldZ);
+    const biome = getBiomeWeight(worldX, worldZ);
     const roll = chunkRng();
 
-    if (y > 0.5 && y < 20) {
-      if (roll < 0.5) {
-        // Tree with trunk
-        const scale = 0.7 + chunkRng() * 0.9;
+    if (y > 0.5 && y < 22) {
+      if (biome.desert > 0.4) {
+        // Desert: cacti, rocks
+        if (roll < 0.3) objects.push({ type: 'cactus', x: localX, y: y + 1.5, z: localZ, rotY: chunkRng() * Math.PI * 2, scale: 0.6 + chunkRng() * 0.8 });
+        else if (roll < 0.6) objects.push({ type: 'rock', x: localX, y: y + 0.3, z: localZ, rotY: chunkRng() * Math.PI * 2, scale: 0.5 + chunkRng() * 1.5 });
+      } else if (roll < 0.40) {
+        // Tree cluster (cone + trunk)
+        const scale = 0.6 + chunkRng() * 1.1;
         objects.push({ type: 'tree',  x: localX, y: y + 2.0 * scale, z: localZ, rotY: 0, scale });
-        objects.push({ type: 'trunk', x: localX, y: y + 0.75, z: localZ, rotY: 0, scale: scale * 0.9 });
-      } else if (roll < 0.75) {
+        objects.push({ type: 'trunk', x: localX, y: y + 0.9,         z: localZ, rotY: 0, scale: scale * 0.85 });
+        // Occasional second smaller tree nearby
+        if (chunkRng() > 0.6) {
+          const dx2 = (chunkRng() - 0.5) * 5;
+          const dz2 = (chunkRng() - 0.5) * 5;
+          const s2  = 0.5 + chunkRng() * 0.7;
+          const x2  = localX + dx2, z2 = localZ + dz2;
+          const y2  = getHeight(worldX + dx2, worldZ + dz2);
+          objects.push({ type: 'tree',  x: x2, y: y2 + 2.0 * s2, z: z2, rotY: 0, scale: s2 });
+          objects.push({ type: 'trunk', x: x2, y: y2 + 0.9,      z: z2, rotY: 0, scale: s2 * 0.85 });
+        }
+      } else if (roll < 0.60) {
         // Rock
-        objects.push({ type: 'rock', x: localX, y: y + 0.3, z: localZ, rotY: chunkRng() * Math.PI * 2, scale: 0.4 + chunkRng() * 1.2 });
+        objects.push({ type: 'rock', x: localX, y: y + 0.3, z: localZ, rotY: chunkRng() * Math.PI * 2, scale: 0.4 + chunkRng() * 1.4 });
+      } else if (roll < 0.72 && y < 5) {
+        // Bush
+        objects.push({ type: 'bush', x: localX, y: y + 0.5, z: localZ, rotY: chunkRng() * Math.PI * 2, scale: 0.4 + chunkRng() * 0.6 });
       }
       // else: open space
+    }
+  }
+
+  // Fence posts along road shoulders (deterministic per chunk)
+  const fenceRng = Alea(`${gameSeed}-fence-${cx}-${cz}`);
+  for (let fi = 0; fi < 6; fi++) {
+    const t    = fenceRng();
+    const side = fenceRng() > 0.5 ? 1 : -1;
+    const localX = t * CHUNK_SIZE;
+    const localZ = fenceRng() * CHUNK_SIZE;
+    const worldX = cx * CHUNK_SIZE + localX;
+    const worldZ = cz * CHUNK_SIZE + localZ;
+    const road   = roadInfo(worldX, worldZ);
+    if (road.onRoad && road.dist > ROAD_WIDTH + 1.5 && road.dist < ROAD_TOTAL - 0.3) {
+      const y = getHeight(worldX, worldZ);
+      objects.push({ type: 'post', x: localX, y: y + 0.5, z: localZ, rotY: 0, scale: 0.9 });
     }
   }
 
@@ -259,7 +329,6 @@ function smoothstep(edge0, edge1, x) {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
 }
-
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 // ── Alea PRNG ─────────────────────────────────────────────────────────────────

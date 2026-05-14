@@ -68,6 +68,7 @@ function buildVehicleMesh(vehicleType, tint) {
 class RemotePlayer {
   constructor(scene, playerData) {
     this.id = playerData.id;
+    this.name = playerData.name || playerData.id || 'Player';
     this.vehicleType = playerData.vehicleType || 0;
     this.tint = PLAYER_TINTS[tintIndex % PLAYER_TINTS.length];
     tintIndex++;
@@ -210,11 +211,11 @@ export class RemotePlayerManager {
     }
   }
 
-  /** Returns array of { id, position } for minimap */
+  /** Returns array of { id, position, tint, name } for minimap */
   getPositions() {
     const out = [];
     for (const [id, rp] of this.players) {
-      out.push({ id, position: rp.position.clone(), tint: rp.tint });
+      out.push({ id, position: rp.position.clone(), tint: rp.tint, name: rp.name || id });
     }
     return out;
   }
