@@ -58,8 +58,15 @@ let renderer, scene, camera;
 let worldManager, localVehicle, remotePlayerManager, networkManager, audioManager;
 let clock;
 let physicsWorker = null;
-// Latest physics state received from worker
-let physicsState = null;
+// Raw physics state received from worker (used for networking)
+let physicsStateRaw = null;
+// Buffer of recent physics states for render interpolation
+const physicsBuffer = [];
+const PHYSICS_BUFFER_SIZE = 8;
+const PHYSICS_INTERP_DELAY = 50; // ms
+const _interpQuat0 = new THREE.Quaternion();
+const _interpQuat1 = new THREE.Quaternion();
+const _interpQuatOut = new THREE.Quaternion();
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
@@ -192,9 +199,85 @@ async function startGame({ seed, vehicleType, playerName }) {
 function onPhysicsMessage(e) {
   const msg = e.data;
   if (msg.type === 'state') {
-    // Store latest physics state; applied in game loop
-    physicsState = msg;
+    // Store raw physics state and buffer for interpolation
+    physicsStateRaw = msg;
+    pushPhysicsSample(msg);
   }
+}
+
+// ── Physics interpolation ───────────────────────────────────────────────────
+
+function pushPhysicsSample(state) {
+  physicsBuffer.push({ ts: performance.now(), state });
+  if (physicsBuffer.length > PHYSICS_BUFFER_SIZE) {
+    physicsBuffer.shift();
+  }
+}
+
+function getInterpolatedPhysicsState(nowMs) {
+  if (physicsBuffer.length === 0) return null;
+
+  const renderTime = nowMs - PHYSICS_INTERP_DELAY;
+
+  // Keep the two samples that bracket renderTime
+  while (physicsBuffer.length >= 2 && physicsBuffer[1].ts <= renderTime) {
+    physicsBuffer.shift();
+  }
+
+  const a = physicsBuffer[0];
+  const b = physicsBuffer[1];
+
+  if (!b) return a.state;
+  if (renderTime <= a.ts) return a.state;
+
+  const span = b.ts - a.ts;
+  const t = span > 0 ? (renderTime - a.ts) / span : 0;
+  const clamped = Math.max(0, Math.min(1, t));
+  return interpolatePhysicsState(a.state, b.state, clamped);
+}
+
+function interpolatePhysicsState(a, b, t) {
+  const out = {
+    type: 'state',
+    px: lerpNumber(a.px, b.px, t),
+    py: lerpNumber(a.py, b.py, t),
+    pz: lerpNumber(a.pz, b.pz, t),
+    velocity: lerpNumber(a.velocity || 0, b.velocity || 0, t),
+  };
+
+  _interpQuat0.set(a.rx, a.ry, a.rz, a.rw);
+  _interpQuat1.set(b.rx, b.ry, b.rz, b.rw);
+  _interpQuatOut.copy(_interpQuat0).slerp(_interpQuat1, t);
+  out.rx = _interpQuatOut.x;
+  out.ry = _interpQuatOut.y;
+  out.rz = _interpQuatOut.z;
+  out.rw = _interpQuatOut.w;
+
+  if (Array.isArray(a.wheels) && Array.isArray(b.wheels)) {
+    const count = Math.min(a.wheels.length, b.wheels.length);
+    out.wheels = new Array(count);
+    for (let i = 0; i < count; i++) {
+      const wa = a.wheels[i];
+      const wb = b.wheels[i];
+      if (!wa || !wb) {
+        out.wheels[i] = wa || wb;
+        continue;
+      }
+      out.wheels[i] = {
+        px: lerpNumber(wa.px, wb.px, t),
+        py: lerpNumber(wa.py, wb.py, t),
+        pz: lerpNumber(wa.pz, wb.pz, t),
+      };
+    }
+  } else {
+    out.wheels = a.wheels || b.wheels;
+  }
+
+  return out;
+}
+
+function lerpNumber(a, b, t) {
+  return a + (b - a) * t;
 }
 
 // ── Main game loop ────────────────────────────────────────────────────────────
@@ -208,8 +291,9 @@ function gameLoop(timestamp) {
   const delta = Math.min(clock.getDelta(), 0.1); // cap delta at 100ms
 
   // Apply physics state to local vehicle
-  if (physicsState && localVehicle) {
-    localVehicle.applyPhysicsState(physicsState);
+  const renderState = getInterpolatedPhysicsState(timestamp);
+  if (renderState && localVehicle) {
+    localVehicle.applyPhysicsState(renderState);
   }
 
   // Update local vehicle (input handling)
@@ -219,7 +303,10 @@ function gameLoop(timestamp) {
     // Send state to server at 20Hz
     if (timestamp - lastNetworkSend >= NETWORK_SEND_INTERVAL) {
       if (networkManager && networkManager.connected) {
-        networkManager.sendState(localVehicle.getNetworkState());
+        const netState = physicsStateRaw
+          ? buildNetworkStateFromPhysics(physicsStateRaw, gameState.vehicleType)
+          : localVehicle.getNetworkState();
+        networkManager.sendState(netState);
       }
       lastNetworkSend = timestamp;
     }
@@ -280,6 +367,15 @@ function updateCamera(vehicle, delta) {
   // Look at a point slightly above the vehicle
   cameraTarget.copy(vPos).add(new THREE.Vector3(0, 1.5, 0));
   camera.lookAt(cameraTarget);
+}
+
+function buildNetworkStateFromPhysics(state, vehicleType) {
+  return {
+    position: { x: state.px, y: state.py, z: state.pz },
+    rotation: { x: state.rx, y: state.ry, z: state.rz, w: state.rw },
+    velocity: state.velocity || 0,
+    vehicleType,
+  };
 }
 
 // ── Handle window resize ──────────────────────────────────────────────────────
